@@ -1,0 +1,1033 @@
+C______________________________________________________________________
+C======================================================================
+      PROGRAM MAUREPARTICLE
+C----------------------------------------------------------------------
+C
+C A particle tracking program that works with 2DDI ADCIRC output
+C
+C This is a Fortran version of the original SCILAB code described in:
+C
+C Dill, Nathan, 2007. "Hydrodyamic Modeling of a Hypothetical River
+C   Diversion Near Empire, Louisiana",  Thesis submitted in partial
+C   fulfillment of the Master of Science Degree in Civil Engineering,
+C   Louisiana State University.
+C      http://etd.lsu.edu/docs/available/etd-06142007-084318/
+C
+C This Fortran version of Maureparticle differs somewhat from the
+C original SCILAB code. Important differences are: 
+C 
+C - there is no longer an option for using RMA2 output;
+C - the treatment of particles hitting the boundary has been 
+C   simplified;
+C - in this version you must input an eddy diffusivity to simulate
+C   random walk diffusion (use zero if you don't want any diffusion);
+C - you must specify the release time for each particle where the 
+C   timing coincides with the times in the ADCIRC fort.64 file 
+C   (this provides flexibility for setting up continuous releases and
+C    such); 
+C - to better approximate surface drifters, an option to add a fraction
+C   of the wind velocity to the drift velocity was added;
+C - and it is much faster than SCILAB.
+C
+C There is also a slightly less featured, slightly buggy, embarssingly
+C parallel MPI version of this program.  Please contact the author
+C if you are intersted. 
+C
+C it should compile pretty easily with any Fortran90 capable compiler
+C e.g.
+C       gfortran -o maurpt.ext maureparticle_3-27-2015.f
+C---------------------------------------------------------------------
+C Input:
+C
+C FORT.14 - ADCIRC grid file 
+C
+C FORT.64 - ADCIRC global time series of depth averaged current
+C           if you want good results, save your FORT.64 output 
+C           frequently.
+C
+C FORT.74 - (optional) ADCIRC global time series of wind velocity
+C           if NWS.NE.0 add WFACTOR*(wind velocity) to the drift 
+C           velocity. must be saved at same frequency as FORT.64
+C
+C PARTICLES.INP - run control parameters, initial particle 
+C                 positions and release times. see example.
+C
+C NODE2EL.TBL - describes relation between nodes and their connected 
+C               elements. use BUILD_TABLES.f to create this file
+C
+C EL2EL.TBL - an element to element neighbor table created by
+C               BUILD_TABLES.f
+C
+C
+C
+C--------------------------------------------------------------------- 
+C Copyright (C) 2007, 2008, 2013, 2015 Nathan Dill
+C
+C This program  is free software; you can redistribute it and/or
+C modify it under the terms of the GNU General Public License as
+C published by the Free Software Foundation; either version 3 of the 
+C License, or (at your option) any later version. 
+C
+C This program is distributed in the hope that it will be useful, but
+C WITHOUT ANY WARRANTY; without even the implied warranty of
+C MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+C General Public License for more details.
+C
+C You should have received a copy of the GNU General Public License
+C along with this program; if not, write to the Free Software 
+C Foundation, Inc., 59 Temple Place - Suite 330,Boston, MA  02111-1307,
+C USA.\
+C
+C you can contact the author at natedill(AT)gmail.com 
+C
+C----------------------------------------------------------------------
+      IMPLICIT NONE
+C---------------------------- VARIABLES -------------------------------      
+      INTEGER NN,NE,NP,I,J,K,NVTS,RK2,FOUND,NSTEPS,DYN,VELCNT,NWS,ICS
+      INTEGER, ALLOCATABLE :: NOC(:,:),NOD2EL(:,:),EL2EL(:,:),LOCAT(:)
+      INTEGER, ALLOCATABLE :: LOST(:),PID(:),ITRKING(:)
+      
+      REAL*8 TS,VTIMINC,RNTIM,OUTPER,TIME,OUTTIME,STDY_TIME,FRACTIME
+      REAL*8 RELEASEPER,VELTIME,EDDY_DIF,WFACTOR,SLAM0,SFEA0
+      REAL*8, ALLOCATABLE :: X(:),Y(:),VX(:),VY(:),RLSTIME(:)
+cc      ,VXP(:),VYP(:)
+      REAL*8, ALLOCATABLE :: XP(:),YP(:),VX2(:),VY2(:)
+      
+      CHARACTER*80 DESC1,DESC2
+C----------------------------------------------------------------------      
+      
+      
+C . . GET INFO TO ALLOCATE ARRAYS     
+      OPEN(UNIT=11,FILE='PARTICLES.INP')
+      OPEN(UNIT=14,FILE='FORT.14')
+      OPEN(UNIT=15,FILE='MAUREPT.OUT')
+      
+      READ(14,'(A80)')DESC1
+      READ(14,*)NE,NN
+      READ(11,'(A80)')DESC2
+      READ(11,*)NP
+      READ(11,*)TS
+      READ(11,*)RNTIM
+      READ(11,*)OUTPER
+      READ(11,*)RK2
+      READ(11,*)DYN
+      READ(11,*)STDY_TIME
+      READ(11,*)EDDY_DIF
+      READ(11,*)NWS
+      READ(11,*)WFACTOR
+      READ(11,*)ICS
+      READ(11,*)SLAM0,SFEA0
+                            WRITE(*,*)'NE,NN,NP',NE,NN,NP
+      CLOSE(14)                      
+      CLOSE(11)
+      
+      ALLOCATE( NOC(3,NE),NOD2EL(12,NN),EL2EL(3,NE),LOCAT(NP) )
+      ALLOCATE( X(NN),Y(NN),VX(NN),VY(NN),VX2(NN),VY2(NN),
+     &      ITRKING(NP),RLSTIME(NP),PID(NP),LOST(NP),XP(NP),YP(NP) )    
+     
+      DO I=1,NP
+        ITRKING(I)=0
+      END DO
+c----------------------------------------------------------------------
+     
+C . . NOW READ ALL THE INPUT DATA . . . . . . . . . . . . . . . . . . .
+      WRITE(*,*)'READING GRID DATA FROM: ',TRIM(DESC1)
+      WRITE(*,*)
+      WRITE(*,*)'NN = ',NN,' NE = ',NE
+      WRITE(*,*)
+      WRITE(*,*)'READING PARTICLE DATA FROM: ',TRIM(DESC2)
+      WRITE(*,*)
+      WRITE(*,*)'NP = ',NP,' TS = ',TS
+      WRITE(*,*)
+      IF (RK2.EQ.1) THEN
+       WRITE(*,*)'VELOCITY INTEGRATION BY 2ND ORDER RUNGE-KUTTA METHOD' 
+         WRITE(*,*)
+      ELSE
+         WRITE(*,*)"VELOCITY INTEGRATION BY EULER'S METHOD"
+         WRITE(*,*)
+      END IF
+      
+      
+      CALL READ_DATA(XP,YP,LOCAT,NOC,X,Y,EL2EL,NOD2EL,VX,VY,NE,NN,
+     &            NP,NVTS,VTIMINC,RLSTIME,NWS,WFACTOR,ICS,SLAM0,SFEA0)
+      WRITE(*,*)'ALL INITIAL INPUT DATA HAS BEEN READ SUCCESSFULLY'
+      
+      
+      IF (DYN.EQ.1) THEN
+         WRITE(*,*)'VELOCITY SOLUTION WILL BE READ DYNAMICALLY'
+         WRITE(*,*)'STARTING AT ',STDY_TIME
+c        CALL READ_64_STDY(STDY_TIME,VX,VY)
+         CALL READ_64_DYN(STDY_TIME,NN,VX,VY,VX2,VY2,1,NWS,WFACTOR)
+C         VELCNT=1
+      ELSE
+         WRITE(*,*)'STEADY-STATE SIMULATION, READING FORT.64 UNTIL ',
+     &              STDY_TIME    
+         CALL READ_64_STDY(STDY_TIME,VX,VY,NWS,WFACTOR)
+         CLOSE(64)
+         WRITE(*,*)'VELOCITY SOLUTION AT ',STDY_TIME,
+     &             ' WILL BE TAKEN AS STEADY-STATE SOLUTION'
+      END IF
+C----------------------------------------------------------------------
+      
+C . . FIGURE NUMBER OF TIMESTEPS. . . . . . . . . . . . . . . . . . . .
+      NSTEPS=INT(RNTIM/TS)
+      
+C . . FIGURE TOTAL NUMBER OF PARTICLES FOR CONTINUOUS RELEASE . . . . . 
+C                 AND ALLOCATE ARRAYS ACCORDINGLY                       
+      
+
+C-------------------INITIAL SEARCH FOR PARTICLES-----------------------      
+C . . INITIALIZE LOST VECTOR. . . . . . . . . . . . . . . . . . . . . .   
+      DO I=1,NP
+         PID(I)=I
+         LOST(I)=0
+      END DO
+
+C . . SEARCH ALL ELEMENTS FOR INITIAL PARTICLE LOCATIONS. . . . . . . .
+C . . THIS WILL BE SKIPPED IF LOCAT IS SPECIFIED IN PARTICLE.INP. . . .
+      WRITE(*,*)'SEARCHING FOR PARTICLES . . .'
+ 20   CONTINUE     
+      DO I=1,NP
+         IF (LOCAT(I).EQ.0) THEN
+c            WRITE(*,*)'SEARCHING FOR PARTICLE, ',
+            DO J=1,NE
+               CALL LOCAT_CHK(J,XP(I),YP(I),NOC,X,Y,FOUND) 
+               IF (FOUND.EQ.1) THEN
+                   LOCAT(I)=J
+                   GOTO 30
+               END IF
+            END DO
+            IF (LOCAT(I).EQ.0) THEN
+              WRITE(*,*)'!!! WARNING - PARTICLE ',I,'CANT BE FOUND !!!!'
+               WRITE(*,*)'!!!  IT WILL BE LOST FROM THE BEGINNING  !!!!'
+               LOST(I)=1
+c               STOP
+            END IF
+         ELSE
+            CALL LOCAT_CHK(LOCAT(I),XP(I),YP(I),NOC,X,Y,FOUND)
+            IF (FOUND.EQ.0) THEN
+               WRITE(*,*)'!! WARNING - BAD LOCAT GIVEN FOR PARTICLE ',I
+               WRITE(*,*)'!! WILL NOW SEARCH FOR PROPER LOCAT'
+               LOCAT(I)=0
+               GOTO 20
+            END IF 
+         END IF
+ 30      CONTINUE            
+      END DO      
+C----------------------------------------------------------------------      
+      
+C----------------------THIS IS THE TRACKING LOOP-----------------------
+C . . INITIALIZE SOME TIME KEEPING VARIABLES. . . . . . . . . . . . . .
+      TIME=STDY_TIME
+      OUTTIME=STDY_TIME
+      VELTIME=STDY_TIME
+      FRACTIME=0.D0
+      
+C . . TRAKCING LOOP . . . . . . . . . . . . . . . . . . . . . . . . . .      
+
+
+      DO J=1,NSTEPS
+c         WRITE(*,*)'TRACKING STEP ',J,' OF ',NSTEPS
+C . . . .WRITE OUTPUT ? . . . . . . . . . . . . . . . . . . . . . . . .                           
+         IF (TIME.EQ.OUTTIME) THEN
+            CALL WRITE_DATA(NP,XP,YP,LOCAT,PID,TIME,ICS,SLAM0,SFEA0)
+            OUTTIME=OUTTIME+OUTPER
+         END IF
+
+C . . . .RELEASE MORE PARTICLES ?. . . . . . . . . . . . . . . . . . . .        
+         DO I=1,NP      
+            IF (TIME.GE.RLSTIME(I)) ITRKING(I)=1;
+         END DO
+         
+C . . . .ALL PARTICLES TAKE A STEP. . . . . . . . . . . . . . . . . . .                 
+         IF (RK2.EQ.1) THEN
+            CALL RK2_STEP(EL2EL,NOD2EL,NP,TS,NOC,X,Y,VX,VY,LOCAT,XP,YP,
+     &                     LOST,VX2,VY2,DYN,FRACTIME,EDDY_DIF,ITRKING)
+         ELSE      
+            CALL EULER_STEP(DYN,NP,TS,NOC,X,Y,VX,VY,VX2,VY2,LOCAT,
+     &                     XP,YP,LOST,FRACTIME,EDDY_DIF,ITRKING)
+         END IF   
+         
+C . . . . . UPDATE LOCAT IF NECESSARY . . . . . . . . . . . . .         
+         DO I=1,NP
+         
+            CALL  LOCAT_CHK(LOCAT(I),XP(I),YP(I),NOC,X,Y,FOUND)
+            
+            IF (FOUND.EQ.0) THEN
+               CALL UPDATE_LOCAT(EL2EL,NOD2EL,X,Y,NOC,XP(I),YP(I),
+     &                                             LOCAT(I),LOST(I))
+            
+               IF (LOST(I).EQ.1) THEN
+                  XP(I)=-99999
+                  YP(I)=-99999
+                  WRITE(*,40)' PARTICLE, ',I,' LOST AT TIME, ',TIME,
+     &                          ' FROM ELEMENT ',LOCAT(I)          
+               END IF      
+            END IF
+         END DO
+ 40   Format (A,I9,A,F13.3,A,I9)
+C . . . .UPDATE SIMULATION TIME . . . . . . . . . . . . . . . . . . . .            
+         TIME=TIME+TS
+         
+
+C . . . .UPDATE FRACTION OF TIME BETWEEN VELOCITY SOLN INPUTS . . . . .
+cCCC fixed bug 9-21-07         FRACTIME=(VELTIME-TIME)/VTIMINC
+ccccc 10-26-07         FRACTIME=1.d0-((VELTIME-TIME)/VTIMINC)
+
+c         FRACTIME=(TIME-VELTIME)/VTIMINC
+
+         
+C . . . .CHECK TO SEE IF WE NEED TO GET NEW VELOCITY DATA         
+         IF (DYN.EQ.1) THEN
+            FRACTIME=(TIME-VELTIME)/VTIMINC
+            IF (TIME.GE.VELTIME) THEN
+               CALL READ_64_DYN(STDY_TIME,NN,VX,VY,VX2,VY2,0,
+     &                                            NWS,WFACTOR)
+               VELTIME=VELTIME+VTIMINC
+               FRACTIME=0.0
+            END IF
+         END IF
+         
+         
+C . . . .READ NEXT OUTPUT IN FORT.64 IF NECESSARY . . . . . . . . . . .         
+c         IF ((TIME.EQ.VELTIME).AND.(DYN.EQ.1)) THEN
+            
+CC            WRITE(*,*)'READING 63'
+            
+CC            PAUSE
+c            CALL READ_64_DYN(NN,VX,VY,VX2,VY2,1)
+c            VELTIME=VELTIME+VTIMINC
+c            FRACTIME=0.D0
+c         END IF   
+         
+         
+      END DO
+C------------------------END OF TRACKING LOOP--------------------------         
+
+      CLOSE(15)
+
+cc      PAUSE
+
+      STOP
+      END PROGRAM
+C======================================================================
+
+C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+
+C______________________________________________________________________
+C======================================================================
+      SUBROUTINE EULER_STEP(DYN,NP,TS,NOC,X,Y,VX,VY,VX2,VY2,LOCAT,XP,
+     &                      YP,LOST,FRACTIME,EDDY_DIF,ITRKING)
+C----------------------------------------------------------------------      
+C PARTICLE POSITIONS (XP,YP) ARE INPUT AND OUTPUT, PARTICLE POSITIONS
+C ARE MOVED BY TAKING A SIMPLE STEP USING EULER'S METHOD 
+C I.E. VELOCITY*TIME=DISPLACEMENT
+C INPUT INCLUDES NUMBER OF PARTICLES NP, TIMESTEP TS, NODE CONNECTIVITY
+C TABLE [NOC], NODAL POSITIONS  {X} AND {Y} AND VELOCITIES {V} , AND 
+C PARTICLE ELEMENTAL LOCATIONS {LOCAT}
+C FOR DYNAMIC RUNS(DYN=1) {VX} AND {VY} ARE THE VELOCITIES AT THE 
+C BEGINNING OF TIME INTERVAL AND {VX2} AND {VY2} ARE AT THE ENC OF THE
+C INTERVAL AND THE VELOCITY IS INTERPOLATED LINEARLY IN BETWEEN USING
+C FRACTIME AS THE FRACTION OF THE TIME INTERVAL FROM T1 TO T2.
+C----------------------------------------------------------------------
+      IMPLICIT NONE
+      
+      INTEGER NP,NOC(3,1),LOCAT(1),I,J,K,LOST(1),DYN,ITRKING(1)
+      DOUBLE PRECISION TS,  X(1),Y(1),VX(1),VY(1),VX2(1),VY2(1),
+     &       EDDY_DIF,R,ANG,XP(1),YP(1),VXP,VYP,VVX(3),VVY(3),FRACTIME
+           
+      DO J=1,NP
+       IF (ITRKING(J).EQ.1) THEN
+      
+       IF (LOST(J).EQ.0) THEN
+          I=LOCAT(J)            
+          IF (DYN.EQ.1) THEN
+C . . . . . .INTERPOLATE VELOCITIES IN TIME FOR DYNAMIC SIMULATION 
+             DO K=1,3
+                VVX(K)=VX(NOC(K,I))+(VX2(NOC(K,I))-VX(NOC(K,I)))
+     &                                                     *FRACTIME
+                VVY(K)=VY(NOC(K,I))+(VY2(NOC(K,I))-VY(NOC(K,I)))
+     &                                                     *FRACTIME
+             END DO
+          ELSE   
+C . . . . . .USE THE STEADY STATE VELOCITIES                    
+             DO K=1,3
+                VVX(K)=VX(NOC(K,I))
+                VVY(K)=VY(NOC(K,I))
+             END DO
+          
+          END IF
+            
+
+C . . . .GET THE X-VELOCITY AT THE PARTICLE POSITION
+         CALL VELINTRP(X(NOC(1,I)),Y(NOC(1,I)),VVX(1),
+     &                 X(NOC(2,I)),Y(NOC(2,I)),VVX(2),
+     &                 X(NOC(3,I)),Y(NOC(3,I)),VVX(3),     
+     &                         XP(J),YP(J),VXP)
+ 
+C . . . .GET THE Y-VELOCITY AT THE PARTICLE POSITION      
+         CALL VELINTRP(X(NOC(1,I)),Y(NOC(1,I)),VVY(1),
+     &                 X(NOC(2,I)),Y(NOC(2,I)),VVY(2),
+     &                 X(NOC(3,I)),Y(NOC(3,I)),VVY(3),     
+     &                         XP(J),YP(J),VYP)   
+
+C . . . .CALCULATE THE NEW POSITION
+         CALL RANDOM_NUMBER(R)
+         CALL RANDOM_NUMBER(ANG)
+         
+         ANG=6.28318530717959D0*ANG
+         R=R*(EDDY_DIF*TS)**0.5D0
+
+         XP(J)=XP(J)+VXP*TS + R * COS(ANG)
+         YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
+
+C         XP(J)=XP(J)+VXP*TS
+C         YP(J)=YP(J)+VYP*TS
+         
+       END IF 
+      END IF
+      END DO   
+      
+      RETURN
+      END SUBROUTINE    
+C======================================================================
+
+C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+
+C______________________________________________________________________
+C======================================================================
+      SUBROUTINE RK2_STEP(EL2EL,NOD2EL,NP,TS,NOC,X,Y,VX,VY,LOCAT,XP,YP,
+     &                     LOST,VX2,VY2,DYN,FRACTIME,EDDY_DIF,ITRKING)
+C----------------------------------------------------------------------
+C THIS SUBROUTINE USES THE 2ND ORDER RUNGE-KUTTA INTEGRATION METHOD 
+C TO ADVANCE THE PARTICLE POSTIONS OVER ONE TIME STEP, IN ADDITION
+C TO THE INPUT ARGUMENTS NEEDED FOR EULER_STEP() THIS ONE ALSO
+C NEEDS THE EL2EL AND NOD2EL TABLES.
+C----------------------------------------------------------------------
+      IMPLICIT NONE
+      
+      INTEGER NP,NOC(3,1),LOCAT(1),I,J,K,FOUND,EL2EL(3,1),NOD2EL(12,1)
+      INTEGER CLOSEST,LOST(1),DYN,ITRKING(1)
+      DOUBLE PRECISION TS,X(1),Y(1),VX(1),VY(1),XXP(NP),YYP(NP),VX2(1)
+      DOUBLE PRECISION XP(1),YP(1),VXP,VYP,DS1,DS2,DS3,VY2(1)    
+      DOUBLE PRECISION FRACTIME,VVX(3),VVY(3),EDDY_DIF,R,ANG
+C . . SAVE THE STARTING POSITIONS 
+      DO I=1,NP
+         IF (LOST(I).EQ.0) THEN
+            XXP(I)=XP(I)
+            YYP(I)=YP(I)
+         END IF
+      END DO
+      
+CC      WRITE(*,*)'STARTING POSITION SAVED'
+      
+C . . DO AN EULER STEP AS A FIRST GUESS
+      CALL EULER_STEP(DYN,NP,TS,NOC,X,Y,VX,VY,VX2,VY2,LOCAT,
+     &                     XP,YP,LOST,FRACTIME,0.D0,ITRKING)
+
+CC      WRITE(*,*)'EULER GUESS COMPLETED'
+     
+C . . FIND THE MID POINT
+      DO I=1,NP
+         IF (LOST(I).EQ.0) THEN
+            XP(I)=(XXP(I)+XP(I))/2
+            YP(I)=(YYP(I)+YP(I))/2
+         END IF
+      END DO
+      
+CC      WRITE(*,*)'MIDPOINT CALCULATED'
+C----------------------------------------------------------------------      
+C . . CHECK LOCAT OF MIDPOINT
+      DO I=1,NP 
+      IF (ITRKING(I).EQ.1) THEN
+       IF (LOST(I).EQ.0) THEN    
+         CALL LOCAT_CHK(LOCAT(I),XP(I),YP(I),NOC,X,Y,FOUND)
+         
+cc         WRITE(*,*)'MIDPOINT CHECKED, PARTICLE ',I
+         
+         IF (FOUND.EQ.0) THEN
+        
+         CALL UPDATE_LOCAT(EL2EL,NOD2EL,X,Y,NOC,XP(I),YP(I),LOCAT(I),K)
+         
+cc         WRITE(*,*)'MIDPOINT UPDATED,  PARTICLE ',I
+         
+            IF (K.EQ.1) THEN
+               XP(I)=XXP(I)
+               YP(I)=YYP(I)
+            END IF        
+         END IF
+       END IF
+      END IF
+      END DO 
+C----------------------------------------------------------------------         
+      
+C . . GET THE VELOCITY AT THE MIDPOINT        
+
+      
+      DO J=1,NP
+      IF (ITRKING(J).EQ.1) THEN
+       IF (LOST(J).EQ.0) THEN   
+         I=LOCAT(J)
+          IF (DYN.EQ.1) THEN
+C . . . . . .INTERPOLATE VELOCITIES IN TIME FOR DYNAMIC SIMULATION 
+             DO K=1,3
+                VVX(K)=VX(NOC(K,I))+(VX2(NOC(K,I))-VX(NOC(K,I)))
+     &                                                     *FRACTIME
+                VVY(K)=VY(NOC(K,I))+(VY2(NOC(K,I))-VY(NOC(K,I)))
+     &                                                     *FRACTIME
+             END DO
+          ELSE   
+C . . . . . .USE THE STEADY STATE VELOCITIES                    
+             DO K=1,3
+                VVX(K)=VX(NOC(K,I))
+                VVY(K)=VY(NOC(K,I))
+             END DO
+          
+          END IF    
+cc         WRITE(*,*)'IM AT LINE 359'
+C . . . .GET THE X-VELOCITY AT THE MIDPOINT
+         CALL VELINTRP(X(NOC(1,I)),Y(NOC(1,I)),VVX(1),
+     &                 X(NOC(2,I)),Y(NOC(2,I)),VVX(2),
+     &                 X(NOC(3,I)),Y(NOC(3,I)),VVX(3),     
+     &                         XP(J),YP(J),VXP)
+ 
+C . . . .GET THE Y-VELOCITY AT THE MIDPOINT      
+         CALL VELINTRP(X(NOC(1,I)),Y(NOC(1,I)),VVY(1),
+     &                 X(NOC(2,I)),Y(NOC(2,I)),VVY(2),
+     &                 X(NOC(3,I)),Y(NOC(3,I)),VVY(3),     
+     &                         XP(J),YP(J),VYP)   
+
+                
+C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT AND ORIGINAL POSITION
+         CALL RANDOM_NUMBER(R)
+         CALL RANDOM_NUMBER(ANG)
+         
+         ANG=6.28318530717959D0*ANG
+         R=R*(EDDY_DIF*TS)**0.5D0
+
+         XP(J)=XP(J)+VXP*TS + R * COS(ANG)
+         YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
+         
+       END IF
+      END IF
+      END DO            
+      
+      
+      RETURN
+      END SUBROUTINE
+C======================================================================
+
+C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+
+C______________________________________________________________________
+C======================================================================
+      SUBROUTINE LOCAT_CHK(LOCAT,XP,YP,NOC,X,Y,FOUND)
+C----------------------------------------------------------------------
+C THIS SUBROUTINE CHECKS IF A PARTICLE RESIDES WITHIN THE ELEMENT LOCAT
+C IT RETURNS THE VALUE FOUND=1 IF THE PARTICLE IS FOUND OR FOUND=0 IF 
+C IT WAS NOT FOUND. LOCAT,XP,YP ARE SCALAR INPUT. 
+C----------------------------------------------------------------------
+      IMPLICIT NONE
+      
+      INTEGER LOCAT,FOUND,NOC(3,1),I
+      DOUBLE PRECISION XP,YP,X(1),Y(1),X1,X2,X3,Y1,Y2,Y3,
+     &                 DS1(2),DS2(2),DS3(2),CROSS,C1,C2,C3
+      
+     
+      FOUND=0
+             
+C . . GET DISPLACEMENTS FROM PARTICLE TO NODES    
+      DS1(1)=X(NOC(1,LOCAT))-XP
+      DS1(2)=Y(NOC(1,LOCAT))-YP
+      DS2(1)=X(NOC(2,LOCAT))-XP
+      DS2(2)=Y(NOC(2,LOCAT))-YP
+      DS3(1)=X(NOC(3,LOCAT))-XP
+      DS3(2)=Y(NOC(3,LOCAT))-YP
+
+C . . ALL + CROSS PRODS. MEANS PART. IS FOUND IF NOC IS ANTI-CLOCKWISE      
+      C1=CROSS(DS1,DS2)
+      C2=CROSS(DS2,DS3)
+      C3=CROSS(DS3,DS1)
+       
+      IF ((C1.GE.0).AND.(C2.GE.0).AND.(C3.GE.0)) FOUND=1
+      
+      RETURN
+      END SUBROUTINE
+C======================================================================
+
+C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+
+C______________________________________________________________________
+C======================================================================
+       SUBROUTINE VELINTRP(X0,Y0,V0,X1,Y1,V1,X2,Y2,V2,XP,YP,VP)
+C----------------------------------------------------------------------
+C THIS SUBROUTINE RETURNS (VP), THE VALUE AT POINT (XP,YP) LINEARLY
+C INTERPOLATED ON A PLANE BETWEEN THE THREE POINTS (X0,Y0)(X1,Y1)(X2,Y2)
+C----------------------------------------------------------------------     
+      IMPLICIT NONE
+      
+      DOUBLE PRECISION X0,Y0,V0,X1,Y1,V1,X2,Y2,V2,XP,YP,VP,T,U,DET,
+     &    XX1,YY1,XX2,YY2,XXP,YYP 
+      
+      XX1=X1-X0
+      XX2=X2-X0
+      YY1=Y1-Y0
+      YY2=Y2-Y0
+      XXP=XP-X0
+      YYP=YP-Y0
+      
+      DET=(YY2*XX1-XX2*YY1)
+
+      T=(XXP*YY2-XX2*YYP)/DET
+      U=(XX1*YYP-YY1*XXP)/DET
+
+      VP=V0+T*(V1-V0)+U*(V2-V0)
+      
+      RETURN
+      END SUBROUTINE
+C======================================================================
+
+C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+
+C______________________________________________________________________
+C======================================================================
+      FUNCTION CROSS(DS1,DS2)
+C----------------------------------------------------------------------
+C THIS FUNCTION RETURNS THE CROSSPRODUCT OF TWO 2D VECTORS
+C----------------------------------------------------------------------
+      IMPLICIT NONE
+      
+      DOUBLE PRECISION CROSS,DS1(2),DS2(2)
+      
+      CROSS=(DS1(1)*DS2(2))-(DS1(2)*DS2(1))
+      
+      RETURN
+      END FUNCTION
+C======================================================================
+
+C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+
+C______________________________________________________________________
+C======================================================================
+      SUBROUTINE UPDATE_LOCAT(EL2EL,NOD2EL,X,Y,NOC,XP,YP,LOCAT,LOST)
+C----------------------------------------------------------------------
+C THIS SUBROUTINE REQUIRES SCALAR INPUT OF PARTICLE POSITION AND LOCAT  
+C IT SEARCHES THE EL2EL TABLE AND NOD2EL TABLE, 
+C IT MAY RETURN A NEW VALUE LOCAT AND WILL RETURN LOST=1 IF PARTICLE 
+C LEAVES BOUNDARY OR SKIPS A NODE/ELEMENT GROUP
+C----------------------------------------------------------------------
+      IMPLICIT NONE
+      
+      INTEGER I,J,K,LOCAT,EL2EL(3,1),NOD2EL(12,1),NOC(3,1),FOUND
+      INTEGER BEL1,BEL2,CLOSEST,LOST,ICNT,NODS1(3),NODS2(3)
+      DOUBLE PRECISION X(1),Y(1),DS(3),DSMIN,XP,YP,X1,Y1,X2,Y2
+
+C . . SKIP FOR LOST PARTICLES . . . . . . . . . . . . . . . . . . . . .
+      IF (LOST.GT.0) THEN
+         LOST=2
+         GOTO 100
+      END IF   
+      
+      LOST=0
+            
+C . . SEARCH EL2EL. . . . . . . . . . . . . . . . . . . . . . . . . . .
+      DO J=1,3
+          K=EL2EL(J,LOCAT) 
+          IF (K.EQ.0) GOTO 40     
+          CALL LOCAT_CHK(K,XP,YP,NOC,X,Y,FOUND)
+          IF (FOUND.EQ.1) THEN 
+             LOCAT=K
+             GOTO 100
+          END IF   
+      END DO
+ 40   CONTINUE     
+C . . IF IT WAS NOT FOUND IN EL2EL SEARCH NOD2EL. . . . . . . . . . . .
+C . . FIND THE CLOSEST NODE . . . . . . . . . . . . . . . . . . . . . .
+      DS(1)=(X(NOC(1,LOCAT))-XP)**2 + (Y(NOC(1,LOCAT))-YP)**2
+      DS(2)=(X(NOC(2,LOCAT))-XP)**2 + (Y(NOC(2,LOCAT))-YP)**2
+      DS(3)=(X(NOC(3,LOCAT))-XP)**2 + (Y(NOC(3,LOCAT))-YP)**2
+      
+      DSMIN=MIN(DS(1),DS(2),DS(3))
+      DO J=1,3
+         IF (DSMIN.EQ.DS(J)) THEN 
+            CLOSEST=NOC(J,LOCAT)
+            GOTO 50
+         END IF
+      END DO     
+ 50   CONTINUE
+
+      DO J=1,12
+         K=NOD2EL(J,CLOSEST)
+         IF (K.EQ.0) GOTO 60
+         CALL LOCAT_CHK(K,XP,YP,NOC,X,Y,FOUND) 
+         IF (FOUND.EQ.1) THEN
+            LOCAT=K
+            GOTO 100
+         END IF
+      END DO
+ 60   CONTINUE
+      
+C . . STILL NOT FOUND,. . . . . . . . . . . . . . . . . . . . . . . . .
+C . . IT MUST HAVE LEFT BOUNDARY OR SKIPPED AN ELEMENT NODE GROUP . . . 
+C . . FIND THE ELEMENTS AROUND CLOSEST THAT HAVE ONLY TWO NEIGHBORS . .
+
+
+c       LOST=1
+c instead just put it at the closest node
+       XP=X(CLOSEST)
+       YP=Y(CLOSEST)
+
+c      BEL1=0
+c      BEL2=0
+c      ICNT=0
+c      DO I=1,12
+c         K=NOD2EL(I,CLOSEST)
+c         IF (K.EQ.0) GOTO 80
+c         IF ( (NOC(3,K).EQ.0) .AND. (BEL1.EQ.0) ) BEL1=K
+c         IF ( (NOC(3,K).EQ.0) .AND. (BEL1.NE.0) ) BEL2=K
+c      END DO
+c 80   CONTINUE
+C . . IF THE CLOSEST NODE IS NOT ON THE BOUNDARY...  
+C      IF (BEL2.EQ.0) THEN
+C         IF (BEL1.EQ.0) THEN
+C             LOST=1
+C             GOTO 100
+C         END IF
+C . . . .FIND THE POSITIONS OF THE OTHER TWO NODES IN BEL1          
+         
+C      END IF
+
+C . . FIND THE NODES WHICH ARE ON EITHER SIDE OF CLOSEST ON THE BOUNDARY            
+C      DO I=1,3
+C         NODS1(I)=NOC(I,BEL1)
+C         NODS2(I)=NOC(I,BEL2)
+C      END DO
+      
+         
+      
+ 
+ 
+ 100  CONTINUE
+      RETURN
+      END SUBROUTINE
+C======================================================================   
+
+C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+
+C______________________________________________________________________
+C======================================================================
+      SUBROUTINE READ_DATA(XP,YP,LOCAT,NOC,X,Y,EL2EL,NOD2EL,VX,VY,
+     &    NE,NN,NP,NVTS,VTIMINC,RLSTIME,NWS,WFACTOR,ICS,SLAM0,SFEA0)
+C----------------------------------------------------------------------
+C
+C----------------------------------------------------------------------
+      IMPLICIT NONE
+      
+      INTEGER I,J,K,NWS,ICS
+      INTEGER LOCAT(1),NOC(3,1),EL2EL(3,1),NOD2EL(12,1),NE,NN,NP,NVTS
+      REAL*8 XP(1),YP(1),X(1),Y(1),VX(1),VY(1),Z,VTIMINC,RLSTIME(1)
+      REAL*8 WFACTOR,WX,WY,SLAM0,SFEA0,SLAM,SFEA
+      
+      character*80 chari
+      
+      OPEN(UNIT=11,FILE='PARTICLES.INP')
+      OPEN(UNIT=12,FILE='EL2EL.TBL')
+      OPEN(UNIT=13,FILE='NODE2EL.TBL')
+      OPEN(UNIT=14,FILE='FORT.14')
+      OPEN(UNIT=64,FILE='FORT.64')
+      IF (NWS.NE.0) OPEN(UNIT=74,FILE='FORT.74')
+      Write(*,*)'reading data opened files'
+C . . READ PARTICLE STARTING POSITIONS      
+      DO I=1,13
+         READ(11,*) 
+      END DO
+      
+      DO I=1,NP
+c         READ(11,*)XP(I),YP(I),RLSTIME(I),LOCAT(I)
+         READ(11,*)SLAM,SFEA,RLSTIME(I),LOCAT(I)
+         IF (ICS.EQ.2) THEN
+            CALL CPPD(XP(I),YP(I),SLAM,SFEA,SLAM0,SFEA0)
+         ELSE
+            XP(I)=SLAM
+            YP(I)=SFEA
+         END IF
+c         WRITE(*,100)'PARTICLE ',I,' WILL BEGIN AT ',XP(I),',',YP(I)
+      END DO
+ 100  FORMAT(1X,A,I8,A,F16.6,A,F16.6)     
+C . . READ NEIGHBOR TABLES
+      DO I=1,NE
+         READ(12,*) (EL2EL(J,I),J=1,3)
+      END DO
+      WRITE(*,*)
+      WRITE(*,*)'EL2EL READ SUCCESSFULLY'
+      WRITE(*,*)
+      
+      DO I=1,NN
+         READ(13,*) (NOD2EL(J,I),J=1,12)
+      END DO
+      WRITE(*,*)'NOD2EL READ SUCCESSFULLY'
+      WRITE(*,*)
+      
+C . . READ GRID INFORMATION
+      READ(14,*)
+      READ(14,*)
+      DO I=1,NN      
+c         READ(14,*)K,X(I),Y(I),Z
+         READ(14,*)K,SLAM,SFEA,Z
+         IF (ICS.EQ.2) THEN
+            CALL CPPD(X(I),Y(I),SLAM,SFEA,SLAM0,SFEA0)
+         ELSE
+            X(I)=SLAM
+            Y(I)=SFEA
+         END IF
+         
+      END DO
+      IF (K.NE.NN) THEN
+        WRITE(*,*)'!!!! ERROR- NODE NUMBERS ARE NOT CONSECUTIVE !!!!'
+        WRITE(*,*)'!!!!           STOPING EXECUTION             !!!!'
+        STOP
+      END IF
+      
+      DO I=1,NE
+         READ(14,*)K,J,(NOC(J,I),J=1,3)
+      END DO
+      
+C . . READ INITIAL VELOCITY DATA
+      READ(64,*)
+      READ(64,*)NVTS,K,VTIMINC 
+      READ(64,*)
+      IF (NWS.NE.0) THEN
+         READ(74,*)
+         READ(74,*) 
+         READ(74,*)
+      END IF
+      IF (K.NE.NN) THEN
+        WRITE(*,*)'!!!! FORT.64 AND FORT.14 HAVE DIFFERENT # NODE !!!!'
+        WRITE(*,*)'!!!!           STOPING EXECUTION               !!!!'
+        STOP
+      END IF
+      DO I=1,NN
+         READ(64,*)K,VX(I),VY(I)
+         IF (NWS.NE.0) THEN
+            READ(74,*)K,WX,WY
+            VX(i)=VX(i)+WFACTOR*WX
+            VY(i)=VY(i)+WFACTOR*WY
+         END IF  
+      END DO
+      WRITE(*,*)'VELOCITY DATA READ SUCCESSFULLY'
+      WRITE(*,*)
+      CLOSE(11)
+      CLOSE(12)
+      CLOSE(13)
+      CLOSE(14)
+      CLOSE(64)
+      IF (NWS.NE.0) CLOSE(74)
+      RETURN
+      END SUBROUTINE
+C======================================================================
+
+C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+
+
+C______________________________________________________________________
+C======================================================================
+      SUBROUTINE WRITE_DATA(NP,XP,YP,LOCAT,PID,TIME,ICS,SLAM0,SFEA0)
+C----------------------------------------------------------------------
+C THIS SUBROUTINE WRITES OUT THE DATA AT THE OUTPUT TIMES
+C ALL ARGUMENTS ARE INPUT
+C----------------------------------------------------------------------
+      IMPLICIT NONE
+      
+      INTEGER I,NP,LOCAT(1),PID(1),ICS
+      REAL*8  XP(1),YP(1),TIME,SLAM0,SFEA0,SLAM,SFEA
+      
+      DO I=1,NP
+         IF (ICS.EQ.2) THEN
+            CALL INVCPD(XP(I),YP(I),SLAM,SFEA,SLAM0,SFEA0)
+            WRITE(15,101)PID(I),SLAM,SFEA,TIME,LOCAT(I)
+         ELSE    
+            WRITE(15,100),PID(I),XP(I),YP(I),TIME,LOCAT(I)
+         END IF
+      END DO
+ 100  format(I12,2f14.2,f14.2,I12)   
+ 101  format(I12,2f14.9,f14.2,I12)   
+      RETURN
+      END SUBROUTINE
+C======================================================================
+
+
+
+
+C      SUBROUTINE BND_LOCAT(EL2EL,NOD2EL,X,Y,NOC,XP,YP,LOCAT,FOUND)
+C----------------------------------------------------------------------
+C THIS SUBROUTINE WILL "MOVE" THE LOST PARTICLE PERPENDICULARLY
+C BACK TO THE BOUNDARY AND ADJUST THE SCALAR XP, AND YP ACCORDINGLY
+C----------------------------------------------------------------------
+C      IMPLICIT NONE
+      
+C      INTEGER, EL2EL(3,1),NOD2EL(12,1),NOC(3,1),LOCAT(1),FOUND,I,J,K
+C      DOUBLE PRECISION X(1),Y(1),XP,YP,
+
+C______________________________________________________________________
+C======================================================================
+      SUBROUTINE READ_64_STDY(STDY_TIME,VX,VY,NWS,WFACTOR)
+C----------------------------------------------------------------------
+C THIS SUBROUTINE READS THROUGH THE FORT.64 FILE UNTIL IF FINDS A TIME 
+C GREATER THAN OR EQUAL TO STDY_TIME, THEN RETURNS THE VELOCITY DATA
+C FROM THAT TIME.
+C----------------------------------------------------------------------
+      IMPLICIT NONE
+      
+      INTEGER I,J,K,NN,NTS,NWS
+      REAL*8 STDY_TIME,VX(1),VY(1),TIME
+      REAL*8 WFACTOR,WX,WY
+      
+      OPEN(UNIT=64,FILE='FORT.64')
+      IF (NWS.NE.0) OPEN(UNIT=74,FILE='FORT.74')
+      
+      READ(64,*)
+      READ(64,*)NTS,NN
+      IF (NWS.NE.0) THEN
+          READ(74,*)
+          READ(74,*)
+      END IF
+      DO J=1,NTS
+         READ(64,*)TIME
+         DO I=1,NN
+            READ(64,*)K,VX(I),VY(I)
+            IF (NWS.NE.0) THEN
+               READ(74,*)K,WX,WY
+               VX(i)=VX(i)+WFACTOR*WX
+               VY(i)=VY(i)+WFACTOR*WY
+            END IF  
+         END DO
+         IF (TIME.GE.STDY_TIME) GOTO 100
+      END DO
+C . . IF STDY_TIME WAS AFTER THE LAST TS IN FORT.64, USE THE LAST TS
+      STDY_TIME=TIME      
+      
+      
+ 100  CONTINUE
+C      CLOSE(64)
+      RETURN
+      END SUBROUTINE
+C======================================================================  
+
+C|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| READ_64_DYN(STDY_TIME,NN,VX,VY,VX2,VY2,0)
+
+C======================================================================
+      SUBROUTINE READ_64_DYN(STDY_TIME,NN,VX,VY,VX2,VY2,FIRST,
+     &                                                 NWS,WFACTOR)
+C----------------------------------------------------------------------
+C THIS SUBROUTINE READS THE NEXT RECORD IN THE FORT.64 TO BE USED
+C FOR VELOCITY INTERPOLATIONS IN TIME.  FIRST IS FLAG SET TO ZERO
+C FOR THE FIRST TIME THIS SUBROUTINE IS CALLED SO THAT VX,XY ARE NOT
+C OVER WRITTEN
+C----------------------------------------------------------------------
+      IMPLICIT NONE
+            
+      
+      INTEGER I,J,K,NN,NTS,FIRST,NWS
+      REAL*8  VX(1),VY(1),TIME,VX2(1),VY2(1),STDY_TIME
+      REAL*8  WFACTOR,WX,WY
+      
+     
+C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES      
+      IF (FIRST.NE.1) THEN
+         DO I=1,NN
+            VX(I)=VX2(I)
+            VY(I)=VY2(I)      
+         END DO
+      END IF
+      
+C . . READ THE NEXT VELOCITY OUTPUT
+      IF (FIRST.EQ.1) THEN
+         OPEN(UNIT=64,FILE='FORT.64')
+         IF (NWS.NE.0) OPEN(UNIT=74,FILE='FORT.74')
+         READ(64,*)
+         READ(64,*)NTS,NN
+         IF (NWS.NE.0) THEN 
+            READ(74,*)
+            READ(74,*)
+         END IF
+         TIME=-90.D0
+         DO WHILE (TIME .LE. STDY_TIME)  
+            READ(64,*,END=100)TIME
+            if (NWS.NE.0) READ(74,*)
+            DO I=1,NN
+               READ(64,*)K,VX(I),VY(I)
+               IF (NWS.NE.0) THEN
+                  READ(74,*)K,WX,WY
+                  VX(i)=VX(i)+WFACTOR*WX
+                  VY(i)=VY(i)+WFACTOR*WY
+               END IF  
+            END DO  
+         END DO 
+      END IF
+      
+      READ(64,*,END=100)TIME
+      IF (NWS.NE.0) READ(74,*)
+      
+      write(*,*)'Reading Velocity Field at Time ',TIME
+      DO I=1,NN
+         READ(64,*)K,VX2(I),VY2(I)
+         IF (NWS.NE.0) THEN
+             READ(74,*)K,WX,WY
+             VX2(I)=VX2(I)+WFACTOR*WX
+             VY2(I)=VY2(I)+WFACTOR*WY
+         END IF  
+      END DO 
+      
+      RETURN      
+ 100  CONTINUE
+      WRITE(*,*)'!! END OF FORT.64, STOPPING EXECUTION!!'
+      CLOSE(64)
+      IF (NWS.NE.0) CLOSE(74)
+
+      STOP
+      END SUBROUTINE
+C======================================================================     
+C the CPP routines below are from the ADCIRC, but modified to take degrees
+C instead of radians
+C******************************************************************************
+C                                                                             *
+C    Transform from lon,lat (lamda,phi) coordinates into CPP coordinates.     *
+C    Lon,Lat must be in DEGREES.                                              *
+C                                                                             *
+C******************************************************************************
+
+      SUBROUTINE CPPD(X,Y,RLAMBDA,PHI,RLAMBDA0,PHI0)
+      IMPLICIT NONE
+      REAL*8 X,Y,RLAMBDA,PHI,RLAMBDA0,PHI0,R
+      REAL*8 DEG2RAD
+      DEG2RAD=3.141592653589793D0/180.D0
+      
+      R=6378206.4d0
+      X=R*(RLAMBDA-RLAMBDA0)*DEG2RAD*COS(PHI0*DEG2RAD)
+      Y=(PHI-PHI0)*DEG2RAD*R
+      RETURN
+      END SUBROUTINE
+
+
+C******************************************************************************
+C                                                                             *
+C    Transform from CPP coordinates to lon,lat (lamda,phi) coordinates        *
+C    Lon,Lat is in DEGREES.                                                   *
+C                                                                             *
+C******************************************************************************
+
+      SUBROUTINE INVCPD(XXCP,YYCP,RLAMBDA,PHI,RLAMBDA0,PHI0)
+      IMPLICIT NONE
+      REAL*8 XXCP,YYCP,RLAMBDA,PHI,RLAMBDA0,PHI0,R
+      REAL*8 DEG2RAD
+      DEG2RAD=3.141592653589793D0/180.D0
+      
+      R=6378206.4d0
+      RLAMBDA=RLAMBDA0+XXCP/(R*COS(PHI0*DEG2RAD)) /DEG2RAD
+      PHI=YYCP/R /DEG2RAD + PHI0
+      RETURN
+      END SUBROUTINE
+
+
+c CPP(X(JKI),Y(JKI),SLAM(JKI),SFEA(JKI),SLAM0,SFEA0)
+c INVCP(X(JKI),Y(JKI),SLAM(JKI),SFEA(JKI),SLAM0,SFEA0)
