@@ -16,7 +16,9 @@ To run the Maureparticle example:
    NODE2EL.TBL and EL2EL.TBL files required by Maureparticle.
    you can do this before ADCIRC has been run since it only 
    needs the FORT.14 file. the EL2EL table can be slow to
-   generate for large grids (a faster version is in the works). 
+   generate for large grids (a faster version is in the works).
+ 
+   !!! use buildTables.pl instead, its much faster !!!
 
 4) Now run the Maureparticle. It generates a file called 
    MAUREPT.OUT that contains the particle ID, X,Y location, time,
