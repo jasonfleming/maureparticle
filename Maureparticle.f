@@ -35,7 +35,7 @@ C if you are intersted.
 C
 C it should compile pretty easily with any Fortran90 capable compiler
 C e.g.
-C       gfortran -o maurpt.ext maureparticle_3-27-2015.f
+C       gfortran -o maurpt.exe Maureparticle.f
 C---------------------------------------------------------------------
 C Input:
 C
@@ -61,7 +61,7 @@ C
 C
 C
 C--------------------------------------------------------------------- 
-C Copyright (C) 2007, 2008, 2013, 2015 Nathan Dill
+C Copyright (C) 2007, 2008, 2013-2016 Nathan Dill
 C
 C This program  is free software; you can redistribute it and/or
 C modify it under the terms of the GNU General Public License as
@@ -335,6 +335,7 @@ C----------------------------------------------------------------------
       INTEGER NP,NOC(3,1),LOCAT(1),I,J,K,LOST(1),DYN,ITRKING(1)
       DOUBLE PRECISION TS,  X(1),Y(1),VX(1),VY(1),VX2(1),VY2(1),
      &       EDDY_DIF,R,ANG,XP(1),YP(1),VXP,VYP,VVX(3),VVY(3),FRACTIME
+      LOGICAL L_ISWET
            
       DO J=1,NP
        IF (ITRKING(J).EQ.1) THEN
@@ -371,22 +372,34 @@ C . . . .GET THE Y-VELOCITY AT THE PARTICLE POSITION
      &                 X(NOC(3,I)),Y(NOC(3,I)),VVY(3),     
      &                         XP(J),YP(J),VYP)   
 
-C . . . .CALCULATE THE NEW POSITION
-         IF ((VXP .NE. 0.D0) .OR. (VYP .NE. 0.D0)) THEN 
-           IF (EDDY_DIF .GT. 0.D0) THEN
-             CALL RANDOM_NUMBER(R)
-             CALL RANDOM_NUMBER(ANG)
-             ANG=6.28318530717959D0*ANG
-             R=R*(EDDY_DIF*TS)**0.5D0
-             XP(J)=XP(J)+VXP*TS + R * COS(ANG)
-             YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
-           ELSE
-             XP(J)=XP(J)+VXP*TS 
-             YP(J)=YP(J)+VYP*TS 
-           END IF
-         END IF         
-       END IF 
-      END IF
+C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT AND ORIGINAL POSITIO
+C . .    DON'T DIFFUSE IF IN A DRY ELEMENT
+C . .    DO STILL ALLOW MOVEMENT IN A DRY ELEMENT WITHOUT DIFFUSION DEPENDING
+C . .    ON THE VELOCOITY OF ANY WET NODES IN THE ELEMENT, WHICH SHOULD
+C . .    HELP PARTICLES FROM GETTING STUCK ON A WET/DRY BOUNDARY
+C . .    ASSUME WE'RE IN A DRY ELEMENT IF ANY OF THE NODES HAVE VELOCITY LESS 
+C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
+         L_ISWET=.TRUE.
+         DO K=1,3
+            IF ((ABS(VVX(K)).LE.EPSILON(VVX(K))).AND.
+     &          (ABS(VVY(K)).LE.EPSILON(VVY(K)))) THEN
+               L_ISWET=.FALSE.
+            END IF
+         END DO
+
+         IF (L_ISWET.AND.(EDDY_DIF .GT. 0.D0)) THEN 
+           CALL RANDOM_NUMBER(R)
+           CALL RANDOM_NUMBER(ANG)
+           ANG=6.28318530717959D0*ANG
+           R=R*(EDDY_DIF*TS)**0.5D0
+           XP(J)=XP(J)+VXP*TS + R * COS(ANG)
+           YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
+         ELSE
+           XP(J)=XP(J)+VXP*TS 
+           YP(J)=YP(J)+VYP*TS 
+         END IF
+       END IF !LOST
+       END IF !TRACKING
       END DO   
       
       RETURN
@@ -409,6 +422,7 @@ C----------------------------------------------------------------------
       
       INTEGER NP,NOC(3,1),LOCAT(1),I,J,K,FOUND,EL2EL(3,1),NOD2EL(12,1)
       INTEGER CLOSEST,LOST(1),DYN,ITRKING(1)
+      LOGICAL L_ISWET
       DOUBLE PRECISION TS,X(1),Y(1),VX(1),VY(1),XXP(NP),YYP(NP),VX2(1)
       DOUBLE PRECISION XP(1),YP(1),VXP,VYP,DS1,DS2,DS3,VY2(1)    
       DOUBLE PRECISION FRACTIME,VVX(3),VVY(3),EDDY_DIF,R,ANG
@@ -423,6 +437,7 @@ C . . SAVE THE STARTING POSITIONS
 CC      WRITE(*,*)'STARTING POSITION SAVED'
       
 C . . DO AN EULER STEP AS A FIRST GUESS
+C . . FOR THIS CALL DIFFUSIVITY IS SET TO ZERO
       CALL EULER_STEP(DYN,NP,TS,NOC,X,Y,VX,VY,VX2,VY2,LOCAT,
      &                     XP,YP,LOST,FRACTIME,0.D0,ITRKING)
 
@@ -499,19 +514,31 @@ C . . . .GET THE Y-VELOCITY AT THE MIDPOINT
      &                         XP(J),YP(J),VYP)   
 
                 
-C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT AND ORIGINAL POSITION
-         IF ((VXP .NE. 0.D0) .OR. (VYP .NE. 0.D0)) THEN 
-           IF (EDDY_DIF .GT. 0.D0) THEN
-             CALL RANDOM_NUMBER(R)
-             CALL RANDOM_NUMBER(ANG)
-             ANG=6.28318530717959D0*ANG
-             R=R*(EDDY_DIF*TS)**0.5D0
-             XP(J)=XP(J)+VXP*TS + R * COS(ANG)
-             YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
-           ELSE
-             XP(J)=XP(J)+VXP*TS 
-             YP(J)=YP(J)+VYP*TS 
-           END IF
+C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT AND ORIGINAL POSITIO
+C . .    DON'T DIFFUSE IF IN A DRY ELEMENT
+C . .    DO STILL ALLOW MOVEMENT IN A DRY ELEMENT WITHOUT DIFFUSION DEPENDING
+C . .    ON THE VELOCOITY OF ANY WET NODES IN THE ELEMENT, WHICH SHOULD
+C . .    HELP PARTICLES FROM GETTING STUCK ON A WET/DRY BOUNDARY
+C . .    ASSUME WE'RE IN A DRY ELEMENT IF ANY OF THE NODES HAVE VELOCITY LESS 
+C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
+         L_ISWET=.TRUE.
+         DO K=1,3
+            IF ((ABS(VVX(K)).LE.EPSILON(VVX(K))).AND.
+     &          (ABS(VVY(K)).LE.EPSILON(VVY(K)))) THEN
+               L_ISWET=.FALSE.
+            END IF
+         END DO
+
+         IF (L_ISWET.AND.(EDDY_DIF .GT. 0.D0)) THEN 
+           CALL RANDOM_NUMBER(R)
+           CALL RANDOM_NUMBER(ANG)
+           ANG=6.28318530717959D0*ANG
+           R=R*(EDDY_DIF*TS)**0.5D0
+           XP(J)=XP(J)+VXP*TS + R * COS(ANG)
+           YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
+         ELSE
+           XP(J)=XP(J)+VXP*TS 
+           YP(J)=YP(J)+VYP*TS 
          END IF
        END IF
       END IF
