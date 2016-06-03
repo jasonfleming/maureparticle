@@ -372,18 +372,19 @@ C . . . .GET THE Y-VELOCITY AT THE PARTICLE POSITION
      &                         XP(J),YP(J),VYP)   
 
 C . . . .CALCULATE THE NEW POSITION
-         CALL RANDOM_NUMBER(R)
-         CALL RANDOM_NUMBER(ANG)
-         
-         ANG=6.28318530717959D0*ANG
-         R=R*(EDDY_DIF*TS)**0.5D0
-
-         XP(J)=XP(J)+VXP*TS + R * COS(ANG)
-         YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
-
-C         XP(J)=XP(J)+VXP*TS
-C         YP(J)=YP(J)+VYP*TS
-         
+         IF ((VXP .NE. 0.D0) .OR. (VYP .NE. 0.D0)) THEN 
+           IF (EDDY_DIF .GT. 0.D0) THEN
+             CALL RANDOM_NUMBER(R)
+             CALL RANDOM_NUMBER(ANG)
+             ANG=6.28318530717959D0*ANG
+             R=R*(EDDY_DIF*TS)**0.5D0
+             XP(J)=XP(J)+VXP*TS + R * COS(ANG)
+             YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
+           ELSE
+             XP(J)=XP(J)+VXP*TS 
+             YP(J)=YP(J)+VYP*TS 
+           END IF
+         END IF         
        END IF 
       END IF
       END DO   
@@ -499,15 +500,19 @@ C . . . .GET THE Y-VELOCITY AT THE MIDPOINT
 
                 
 C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT AND ORIGINAL POSITION
-         CALL RANDOM_NUMBER(R)
-         CALL RANDOM_NUMBER(ANG)
-         
-         ANG=6.28318530717959D0*ANG
-         R=R*(EDDY_DIF*TS)**0.5D0
-
-         XP(J)=XP(J)+VXP*TS + R * COS(ANG)
-         YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
-         
+         IF ((VXP .NE. 0.D0) .OR. (VYP .NE. 0.D0)) THEN 
+           IF (EDDY_DIF .GT. 0.D0) THEN
+             CALL RANDOM_NUMBER(R)
+             CALL RANDOM_NUMBER(ANG)
+             ANG=6.28318530717959D0*ANG
+             R=R*(EDDY_DIF*TS)**0.5D0
+             XP(J)=XP(J)+VXP*TS + R * COS(ANG)
+             YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
+           ELSE
+             XP(J)=XP(J)+VXP*TS 
+             YP(J)=YP(J)+VYP*TS 
+           END IF
+         END IF
        END IF
       END IF
       END DO            
