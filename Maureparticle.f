@@ -88,7 +88,7 @@ C---------------------------- VARIABLES -------------------------------
       INTEGER, ALLOCATABLE :: LOST(:),PID(:),ITRKING(:)
       
       REAL*8 TS,VTIMINC,RNTIM,OUTPER,TIME,OUTTIME,STDY_TIME,FRACTIME
-      REAL*8 RELEASEPER,VELTIME,EDDY_DIF,WFACTOR,SLAM0,SFEA0
+      REAL*8 RELEASEPER,VELTIME1,VELTIME2,EDDY_DIF,WFACTOR,SLAM0,SFEA0
       REAL*8, ALLOCATABLE :: X(:),Y(:),VX(:),VY(:),RLSTIME(:)
 cc      ,VXP(:),VYP(:)
       REAL*8, ALLOCATABLE :: XP(:),YP(:),VX2(:),VY2(:)
@@ -220,7 +220,8 @@ C----------------------THIS IS THE TRACKING LOOP-----------------------
 C . . INITIALIZE SOME TIME KEEPING VARIABLES. . . . . . . . . . . . . .
       TIME=STDY_TIME
       OUTTIME=STDY_TIME
-      VELTIME=STDY_TIME
+      VELTIME1=STDY_TIME
+      VELTIME2=VELTIME1+VTIMINC
       FRACTIME=0.D0
       
 C . . TRAKCING LOOP . . . . . . . . . . . . . . . . . . . . . . . . . .      
@@ -279,13 +280,13 @@ c         FRACTIME=(TIME-VELTIME)/VTIMINC
          
 C . . . .CHECK TO SEE IF WE NEED TO GET NEW VELOCITY DATA         
          IF (DYN.EQ.1) THEN
-            FRACTIME=(TIME-VELTIME)/VTIMINC
-            IF (TIME.GE.VELTIME) THEN
+            IF (TIME.GT.VELTIME2) THEN
                CALL READ_64_DYN(STDY_TIME,NN,VX,VY,VX2,VY2,0,
      &                                            NWS,WFACTOR)
-               VELTIME=VELTIME+VTIMINC
-               FRACTIME=0.0
+               VELTIME1=VELTIME2
+               VELTIME2=VELTIME1+VTIMINC
             END IF
+            FRACTIME=(TIME-VELTIME1)/VTIMINC
          END IF
          
          
@@ -983,8 +984,9 @@ C . . READ THE NEXT VELOCITY OUTPUT
             READ(74,*)
          END IF
          TIME=-90.D0
-         DO WHILE (TIME .LE. STDY_TIME)  
+         DO WHILE (TIME .LT. STDY_TIME)  
             READ(64,*,END=100)TIME
+            write(*,*)'Reading Velocity Field at Time ',TIME            
             if (NWS.NE.0) READ(74,*)
             DO I=1,NN
                READ(64,*)K,VX(I),VY(I)
