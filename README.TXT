@@ -2,8 +2,8 @@ To run the Maureparticle example:
 
 1) Compile the Maureparticle and BUILT_TABLES programs. e.g.
      
-    gfortran -o maurept.exe Maureparticle_3-27-2015.f
-    gfortran -o buildtables.exe BUILD_TABLES.f
+    gfortran -o maurept.exe Maureparticle.f
+    gfortran -o buildtables.exe BUILD_TABLES.f, or us buildTables.pl, its faster
 
 2) Move the executables and change directory into the example
    directory.
@@ -31,7 +31,7 @@ To run the Maureparticle example:
    parameters. it should be self-explanatory. 
 
 
-More about PARTICLES.INP:
+More about PARTICLES.INP and Maureparticle operation and run control:
                                                                        |
 PARTICLES.INP is a required input file that contains information about 
 run timing, tracking method, and starting particle positions and
@@ -112,7 +112,17 @@ line 9:  EDDY_DIF - Eddy diffusivity  in dimensions of (L*L/T).
          RANDOM_NUMBER, which is non-standard prior to the Fortran95 
          standard.  Because of this It is not totally portable, and I 
          have seen weird behavior with some compilers.  It seems to 
-         work fine with recent version of gfortran and intel. 
+         work fine with recent version of gfortran and intel.  As of 
+         revision on 6/3/2016 diffusivity is automtically turned off
+         when a particle is an a dry element,  this was implemented
+         in an attempt to prevent particles from randomly tracking
+         across dry land.  When in a dry element, particles are still
+         tracked without diffusion based on the interpolated velocity,
+         which may be non-zero if the element has one or two wet nodes
+         the idea is that still allowing non-diffusive tracking in
+         partially dry elements (fully dry from ADCIRC perspective)
+         will prevent particles from getting stuck on wet/dry 
+         boundaries.
 
 line 10: NWS -  Indicates whether or not to include additional particle
          displacement based on the wind velocity.  Wind is applied if 
