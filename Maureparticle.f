@@ -861,7 +861,7 @@ C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
 C______________________________________________________________________
 C======================================================================
-      SUBROUTINE WRITE_DATA(NP,XP,YP,LOCAT,PID,TIME,ICS,SLAM0,SFEA0
+      SUBROUTINE WRITE_DATA(NP,XP,YP,LOCAT,PID,TIME,ICS,SLAM0,SFEA0,
      &                                                          LOST)
 C----------------------------------------------------------------------
 C THIS SUBROUTINE WRITES OUT THE DATA AT THE OUTPUT TIMES
