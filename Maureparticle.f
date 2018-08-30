@@ -3,6 +3,14 @@ C======================================================================
       PROGRAM MAUREPARTICLE
 C----------------------------------------------------------------------
 C
+C nld 2018 Aug 24 - lose_wetdry version:
+C     modifications to lose particles when they enter a dry element  
+C     lost particles are indicated in output by LOCAT = 0
+C     modfication is made to reduce the unrealistic accumulation of 
+C     particles near wet-dry boundaries that is caused by unrealistic 
+C     low current velocities in dry elements, due to interpolation 
+C     of zero current from dry nodes.
+C
 C A particle tracking program that works with 2DDI ADCIRC output
 C and potentially any other 2D unstructured grid hydrodynamic model 
 C
@@ -241,8 +249,8 @@ C . . TRAKCING LOOP . . . . . . . . . . . . . . . . . . . . . . . . . .
 c         WRITE(*,*)'TRACKING STEP ',J,' OF ',NSTEPS
 C . . . .WRITE OUTPUT ? . . . . . . . . . . . . . . . . . . . . . . . .                           
          IF (TIME.EQ.OUTTIME) THEN
-            CALL WRITE_DATA(NP,XP,YP,LOCAT,PID,TIME,ICS,SLAM0,SFEA0)
-            OUTTIME=OUTTIME+OUTPER
+           CALL WRITE_DATA(NP,XP,YP,LOCAT,PID,TIME,ICS,SLAM0,SFEA0,LOST)
+           OUTTIME=OUTTIME+OUTPER
          END IF
 
 C . . . .RELEASE MORE PARTICLES ?. . . . . . . . . . . . . . . . . . . .        
@@ -276,17 +284,9 @@ C . . . . . UPDATE LOCAT IF NECESSARY . . . . . . . . . . . . .
                END IF      
             END IF
          END DO
- 40   Format (A,I9,A,F13.3,A,I9)
+ 40      Format (A,I9,A,F13.3,A,I9)
 C . . . .UPDATE SIMULATION TIME . . . . . . . . . . . . . . . . . . . .            
          TIME=TIME+TS
-         
-
-C . . . .UPDATE FRACTION OF TIME BETWEEN VELOCITY SOLN INPUTS . . . . .
-cCCC fixed bug 9-21-07         FRACTIME=(VELTIME-TIME)/VTIMINC
-ccccc 10-26-07         FRACTIME=1.d0-((VELTIME-TIME)/VTIMINC)
-
-c         FRACTIME=(TIME-VELTIME)/VTIMINC
-
          
 C . . . .CHECK TO SEE IF WE NEED TO GET NEW VELOCITY DATA         
          IF (DYN.EQ.1) THEN
@@ -299,25 +299,10 @@ C . . . .CHECK TO SEE IF WE NEED TO GET NEW VELOCITY DATA
             FRACTIME=(TIME-VELTIME1)/VTIMINC
          END IF
          
-         
-C . . . .READ NEXT OUTPUT IN FORT.64 IF NECESSARY . . . . . . . . . . .         
-c         IF ((TIME.EQ.VELTIME).AND.(DYN.EQ.1)) THEN
-            
-CC            WRITE(*,*)'READING 63'
-            
-CC            PAUSE
-c            CALL READ_64_DYN(NN,VX,VY,VX2,VY2,1)
-c            VELTIME=VELTIME+VTIMINC
-c            FRACTIME=0.D0
-c         END IF   
-         
-         
       END DO
 C------------------------END OF TRACKING LOOP--------------------------         
 
       CLOSE(15)
-
-cc      PAUSE
 
       STOP
       END PROGRAM
@@ -397,6 +382,7 @@ C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
                L_ISWET=.FALSE.
             END IF
          END DO
+         IF (.NOT.L_ISWET) LOST(J)=1
 
          IF (L_ISWET.AND.(EDDY_DIF .GT. 0.D0)) THEN 
            CALL RANDOM_NUMBER(R)
@@ -539,6 +525,7 @@ C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
                L_ISWET=.FALSE.
             END IF
          END DO
+         IF (.NOT.L_ISWET) LOST(J)=1
 
          IF (L_ISWET.AND.(EDDY_DIF .GT. 0.D0)) THEN 
            CALL RANDOM_NUMBER(R)
@@ -652,26 +639,26 @@ C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
 C______________________________________________________________________
 C======================================================================
-      SUBROUTINE UPDATE_LOCAT(EL2EL,NOD2EL,X,Y,NOC,XP,YP,LOCAT,LOST)
+      SUBROUTINE UPDATE_LOCAT(EL2EL,NOD2EL,X,Y,NOC,XP,YP,LOCAT,LST)
 C----------------------------------------------------------------------
 C THIS SUBROUTINE REQUIRES SCALAR INPUT OF PARTICLE POSITION AND LOCAT  
 C IT SEARCHES THE EL2EL TABLE AND NOD2EL TABLE, 
-C IT MAY RETURN A NEW VALUE LOCAT AND WILL RETURN LOST=1 IF PARTICLE 
+C IT MAY RETURN A NEW VALUE LOCAT AND WILL RETURN LST=1 IF PARTICLE 
 C LEAVES BOUNDARY OR SKIPS A NODE/ELEMENT GROUP
 C----------------------------------------------------------------------
       IMPLICIT NONE
       
       INTEGER I,J,K,LOCAT,EL2EL(3,1),NOD2EL(12,1),NOC(3,1),FOUND
-      INTEGER BEL1,BEL2,CLOSEST,LOST,ICNT,NODS1(3),NODS2(3)
+      INTEGER BEL1,BEL2,CLOSEST,LST,ICNT,NODS1(3),NODS2(3)
       DOUBLE PRECISION X(1),Y(1),DS(3),DSMIN,XP,YP,X1,Y1,X2,Y2
 
 C . . SKIP FOR LOST PARTICLES . . . . . . . . . . . . . . . . . . . . .
-      IF (LOST.GT.0) THEN
-         LOST=2
+      IF (LST.GT.0) THEN
+         LST=2
          GOTO 100
       END IF   
       
-      LOST=0
+      LST=0
             
 C . . SEARCH EL2EL. . . . . . . . . . . . . . . . . . . . . . . . . . .
       DO J=1,3
@@ -874,22 +861,25 @@ C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
 C______________________________________________________________________
 C======================================================================
-      SUBROUTINE WRITE_DATA(NP,XP,YP,LOCAT,PID,TIME,ICS,SLAM0,SFEA0)
+      SUBROUTINE WRITE_DATA(NP,XP,YP,LOCAT,PID,TIME,ICS,SLAM0,SFEA0
+     &                                                          LOST)
 C----------------------------------------------------------------------
 C THIS SUBROUTINE WRITES OUT THE DATA AT THE OUTPUT TIMES
 C ALL ARGUMENTS ARE INPUT
 C----------------------------------------------------------------------
       IMPLICIT NONE
       
-      INTEGER I,NP,LOCAT(1),PID(1),ICS
+      INTEGER I,NP,LOCAT(1),PID(1),ICS,LOST(1),LCT
       REAL*8  XP(1),YP(1),TIME,SLAM0,SFEA0,SLAM,SFEA
       
       DO I=1,NP
+         LCT=LOCAT(I)
+         IF (LOST(I).ne.0) LCT=0    
          IF (ICS.EQ.2) THEN
             CALL INVCPD(XP(I),YP(I),SLAM,SFEA,SLAM0,SFEA0)
-            WRITE(15,101)PID(I),SLAM,SFEA,TIME,LOCAT(I)
+            WRITE(15,101)PID(I),SLAM,SFEA,TIME,LCT
          ELSE    
-            WRITE(15,100),PID(I),XP(I),YP(I),TIME,LOCAT(I)
+            WRITE(15,100),PID(I),XP(I),YP(I),LCT
          END IF
       END DO
  100  format(I12,2f14.2,f14.2,I12)   
