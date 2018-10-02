@@ -578,6 +578,7 @@ C----------------------------------------------------------------------
       
      
       FOUND=0
+      IF (LOCAT.eq.0) RETURN
              
 C . . GET DISPLACEMENTS FROM PARTICLE TO NODES    
       DS1(1)=X(NOC(1,LOCAT))-XP
