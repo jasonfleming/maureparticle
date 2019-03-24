@@ -7,8 +7,8 @@ DESCRIPTION LINE
 1                 ! DYN - 0 FOR STEADY-STATE, 1 FOR DYNAMIC
 0                 ! STEADY_TIME (seconds) use zero for dynamic run 
 2                 ! EDDY_DIF - eddy diffusivity (L**2/T)
-5                 ! NWS
-0.020              ! WFACTOR
+5                 ! NWS (nonzero value causes fort.74 wind velocity file to be read
+0.020             ! WFACTOR (percent of wind velocity used in tracking velocity, set to 1.0 if using only wind)
 2                 ! ICS
 -71 40        ! SLAM0,SFEA0
 -70.144007 41.499966 900 0   !  start x, start y, start time, starting element (zero if not known)
