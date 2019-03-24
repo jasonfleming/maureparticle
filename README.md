@@ -1,22 +1,20 @@
-# maureparticle
-A particle tracking program. Click image below for animated visualization.
+# Maureparticle
 [![Maureparticle particle tracking visualization using ADCIRC velocity fields and Paraview.](maureparticle.png)](https://asgs-static-assets.sfo2.digitaloceanspaces.com/web/maureparticle.gif "Maureparticle visualization - click to watch")
+Click image above for animated visualization.
 
-#The Maureparticle Example
+Maureparticle is a 2D particle tracking program that reads ADCIRC ascii 
+water current velocity output files (fort.64) and optionally ADCIRC ascii
+wind velocity output files fort.74 and performs particle tracking. 
 
-1. Compile the Maureparticle and BUILT_TABLES programs. e.g.
+# The Maureparticle Example
+
+1. Compile the `Maureparticle.f` and `BUILD_TABLES.f` programs. e.g.
 ```     
     gfortran -o maurept.exe Maureparticle.f
     gfortran -o buildtables.exe BUILD_TABLES.f, or use buildTables.pl, its faster
 ```
 
 2. Move the executables and change directory into the example directory.
-
-3. Run the example ADCIRC simulation. This is a short run on the ec_95d 
-grid with tides and a constant ENE wind. On linux or Mac you may need 
-to make symbolic links in lower case to the all caps file names (e.g. 
-`ln -s FORT.14 fort.14` because ADCIRC will look for lower case 
-filenames on these case-sensitive platforms.
 
 4. Run the BUILD_TABLES program to generate the NODE2EL.TBL and 
 EL2EL.TBL files required by Maureparticle. You can do this before 
@@ -25,6 +23,12 @@ table can be slow to generate for large grids. **Use the buildTables.pl
 perl script instead, it is much faster.** Set PERL5LIB to add the path to 
 your local clone of the [ourPerl 
 repository](https://github.com/natedill/ourPerl).   
+
+3. Run the example ADCIRC simulation. This is a short run on the ec_95d 
+grid with tides and a constant ENE wind. On linux or Mac you may need 
+to make symbolic links in lower case to the all caps file names (e.g. 
+`ln -s FORT.14 fort.14` because ADCIRC will look for lower case 
+filenames on these case-sensitive platforms.
 
 5. Now run the Maureparticle executable. It generates a file called 
 MAUREPT.OUT that contains the particle ID, X,Y location, time, and the 
@@ -38,7 +42,7 @@ view the results in Google Earth.
 parameters. it should be self-explanatory. 
 
 # Maureparticle Parameters
-                                                                      |
+                                                               
 PARTICLES.INP is a required input file that contains information about 
 run timing, tracking method, and starting particle positions and time. 
 I tried to make it similar to the fort.15 in format, where each line is 
@@ -49,15 +53,15 @@ Here is a bit more description about the parameters in that file.
  
 All lines are required input, but may be ignored depending on context. 
 
-1. An 80 character description - put whatever you want here it doesn't do anything.
+1. **DESC** An 80 character description - put whatever you want here it doesn't do anything.
 
-2. **NP** This is the number of particles to track (i.e. the minimum 
+2. **NP** - This is the number of particles to track (i.e. the minimum 
 number of starting positions listed at the end of the file starting at 
 line 14).  You can actually include more starting particle lines in the 
 file, but Maureparticle will only read and track NP of them.  If you 
 list fewer than NP particle positions, Maureparticle will not run.
 
-3. **TS** The tracking time step in seconds. You'll want to make the 
+3. **TS** - The tracking time step in seconds. You'll want to make the 
 time step small enough so that  particles won't travel more than the 
 grid spacing in a single timestep.  If you make the timestep too big 
 the particle may get "lost".  
@@ -75,7 +79,7 @@ the particle may get "lost".
          run will stop when the time gets to  STDY_TIME + RUNTIM 
          seconds. 
 
-5. **OUTPER** This is the period of time in seconds at which 
+5. **OUTPER** - This is the period of time in seconds at which 
          Maureparticle writes output. e.g. setting OUTPER to 900 will 
          write output every 15 minutes.
 
@@ -146,7 +150,7 @@ the particle may get "lost".
           grid is in Cartesian coordinattes, or ICS = 2 to indicate the 
           grid is in geographic coordinates. 
 
-13. `SLAM0`, `SFEA0` - same as ADCIRC.  when ICS equals 2 (geographic 
+13. **SLAM0, SFEA0** - same as ADCIRC.  when ICS equals 2 (geographic 
           coordinate grids) Maureparticle uses the CPP projection 
           (same projection used in ADCIRC) to transform to Cartesian 
           Coordinates SLAM0 and SFEA0 are the longitude and latitude 
@@ -167,10 +171,3 @@ the particle may get "lost".
           output from a previous simulation, it can save some 
           simulation time by eliminating the need to perform an 
           initial particle search.  
-
-
-
-
-
-
-
