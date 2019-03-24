@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 #
-# a script to make kmz tracks from Maurepaticle outpur
+# a script to make kmz tracks from Maureparticle output
 #
 # Copyleft 2015 Nate Dill
 #
@@ -8,10 +8,11 @@
 
 use strict;
 use warnings;
-use GD;
+use GD; # must be installed; on ubuntu I used sudo apt-get install libgd-gd2-perl
 use Archive::Zip qw( :ERROR_CODES :CONSTANTS );
 use File::Path qw( remove_tree);
 
+my $osname = $^O; # will be "linux", "MSWin32", or "darwin"
 
 open FILE, "<MAUREPT.OUT" or die "cant open MAUREPT.OUT";
 
@@ -170,32 +171,35 @@ sub makeColorDots {
   my @colors;
   while ($color>0) {
      my $im = new GD::Image($xpix,$ypix);
-        @colors = &setColors_jet($im);	 
-        my $i;
-        my $j =  0;
-        my $cnt = 0;	
-	while ($j<$ypix) {
+     @colors = &setColors_jet($im);	 
+     my $i;
+     my $j =  0;
+     my $cnt = 0;	
+     while ($j<$ypix) {
 	      $i=0;	
-              while ($i<$xpix) {
-                    my $r = sqrt(($i-$imid)**2 + ($j-$jmid)**2);
-		    if ($r<$imid) {
-                       $im->setPixel($i,$j,$color);   #set the pixel color based on the map
-	            }else{
-                       $im->setPixel($i,$j,0);   #set the pixel color based on the map
-	            }
-		  $i++;
+         while ($i<$xpix) {
+            my $r = sqrt(($i-$imid)**2 + ($j-$jmid)**2);
+		      if ($r<$imid) {
+               $im->setPixel($i,$j,$color);   #set the pixel color based on the map
+	         } else {
+               $im->setPixel($i,$j,0);   #set the pixel color based on the map
+            }
+		      $i++;
 	      }
 	      $j++;
-        }
-        # now write the png file
-	my $pngFile= "Files\\$color.png";
-	open FILE2, ">$pngFile";
-	binmode FILE2;
-	print FILE2 $im->png;
-	close(FILE2);
-        $im=undef;
-	$color--;
-  }
+       }
+       # now write the png file
+       my $pngFile= "Files\\$color.png";
+       if ($osname eq "linux" || $osname eq "darwin" ) {
+          $pngFile= "Files/$color.png";             
+       }
+	    open FILE2, ">$pngFile";
+	    binmode FILE2;
+	    print FILE2 $im->png;
+	    close(FILE2);
+       $im=undef;
+	    $color--;
+   }
 }
 sub setColors_jet {
       my($im) = shift;
