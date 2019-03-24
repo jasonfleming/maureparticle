@@ -1,10 +1,12 @@
 # Maureparticle
-[![Maureparticle particle tracking visualization using ADCIRC velocity fields and Paraview.](maureparticle.png)](https://asgs-static-assets.sfo2.digitaloceanspaces.com/web/maureparticle.gif "Maureparticle visualization - click to watch")
-Click image above for animated visualization.
 
 Maureparticle is a 2D particle tracking program that reads ADCIRC ascii 
 water current velocity output files (fort.64) and optionally ADCIRC ascii
 wind velocity output files fort.74 and performs particle tracking. 
+
+[![Maureparticle particle tracking visualization using ADCIRC velocity fields and Paraview.](maureparticle.png)](https://asgs-static-assets.sfo2.digitaloceanspaces.com/web/maureparticle.gif "Maureparticle visualization - click to watch")
+Click image above for animated visualization.
+
 
 # The Maureparticle Example
 
