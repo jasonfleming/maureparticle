@@ -5,7 +5,7 @@ DESCRIPTION LINE
 900              ! OUTPER - PERIOD OF TIME FOR OUTPUT IN SECONDS 
 1                 ! RK2 - 0 FOR EULER'S METHOD, 1 FOR RK2 METHOD
 1                 ! DYN - 0 FOR STEADY-STATE, 1 FOR DYNAMIC
-0                 ! STEADY_TIME (seconds) use zero for dynamic run 
+0                 ! STEADY_TIME (seconds) use starting time of fort.64 (or later) for dynamic run 
 2                 ! EDDY_DIF - eddy diffusivity (L**2/T)
 5                 ! NWS (nonzero value causes fort.74 wind velocity file to be read
 0.020             ! WFACTOR (percent of wind velocity used in tracking velocity, set to 1.0 if using only wind)

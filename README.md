@@ -83,7 +83,9 @@ the particle may get "lost".
 
 5. **OUTPER** - This is the period of time in seconds at which 
          Maureparticle writes output. e.g. setting OUTPER to 900 will 
-         write output every 15 minutes.
+         write output every 15 minutes. Be sure to set the TS so it 
+         divides evenly into the OUTPER (otherwise output will never
+         be written). 
 
 6. **RK2** This parameter selects which tracking method to use. 
          Setting RK2 equal to 1 will apply 2nd order velocity 
@@ -105,7 +107,7 @@ the particle may get "lost".
         [and optionally fort.74] file until it encounters a time greater
          than or equal to this time in seconds.  For a steady-state run
          Maureparticle will apply the velocity field at that time as the
-         single time constant field.   For a dynamic run Maureparticle 
+         single time constant field. For a dynamic run Maureparticle 
          will start the tracking loop at that time, however it will not
          actually start moving particles until they are released 
          according to their RLSTIME (see below).
