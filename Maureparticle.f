@@ -139,7 +139,7 @@ C----------------------------------------------------------------------
       
       CHARACTER*80 DESC1,DESC2
 
-      logical :: metonly = .false. ! .true. if particles should track wind instead of water current
+      logical :: metonly  ! .true. if particles should track wind instead of water current
       character(len=1024) :: maureParameterInputFile ! particle tracking control plus initial particle location
       character(len=1024) :: meshFile            ! adcirc fort.14
       character(len=1024) :: maureParticleOutputFile ! locations v time
@@ -147,7 +147,6 @@ C----------------------------------------------------------------------
       character(len=1024) :: windVelocityFile      
       character(len=1024) :: elementLookupTableFile
       character(len=1024) :: nodeLookupTableFile
-      character(len=1024) :: currentVelocityFile
 
       logical :: keepDryParticles
       logical :: diffuseDryParticles 
@@ -161,11 +160,12 @@ C----------------------------------------------------------------------
 
 C . . GET INFO TO ALLOCATE ARRAYS     
 
-      OPEN(UNIT=11,FILE=trim(maureParameterInputFile))
-      OPEN(UNIT=14,FILE=trim(meshFile))
-      
+      OPEN(UNIT=14,FILE=trim(meshFile))     
       READ(14,'(A80)')DESC1
       READ(14,*)NE,NN
+      CLOSE(14)
+
+      OPEN(UNIT=11,FILE=trim(maureParameterInputFile))      
       READ(11,'(A80)')DESC2
       READ(11,*)NP
       READ(11,*)TS
@@ -180,7 +180,7 @@ C . . GET INFO TO ALLOCATE ARRAYS
       READ(11,*)ICS
       READ(11,*)SLAM0,SFEA0
       WRITE(*,*)'NE,NN,NP',NE,NN,NP
-      CLOSE(14)                      
+                      
       CLOSE(11)
       !
       ! check input: emit an error message if the output interval is
@@ -306,32 +306,36 @@ c         READ(14,*)K,X(I),Y(I),Z
       END SUBROUTINE READ_DATA
       !================================================================
 
-C======================================================================
+      !================================================================
       SUBROUTINE READ_VEL(velEnd)
-C----------------------------------------------------------------------
-C THIS SUBROUTINE READS THE NEXT RECORD IN THE FORT.64 TO BE USED
-C FOR VELOCITY INTERPOLATIONS IN TIME.  FIRST IS FLAG SET TO ZERO
-C FOR THE FIRST TIME THIS SUBROUTINE IS CALLED SO THAT VX,XY ARE NOT
-C OVER WRITTEN
-C----------------------------------------------------------------------
-C     This subroutine assumes that the current and wind velocity data
-C     have the same start time, end time, and time increment
-C----------------------------------------------------------------------
+      !----------------------------------------------------------------------
+      ! THIS SUBROUTINE READS THE NEXT RECORD IN THE FORT.64 TO BE USED
+      ! FOR VELOCITY INTERPOLATIONS IN TIME.  FIRST IS FLAG SET TO ZERO
+      ! FOR THE FIRST TIME THIS SUBROUTINE IS CALLED SO THAT VX,XY ARE NOT
+      ! OVER WRITTEN
+      !----------------------------------------------------------------------
+      ! This subroutine assumes that the current and wind velocity data
+      ! have the same start time, end time, and time increment
+      !----------------------------------------------------------------------
       IMPLICIT NONE
       logical, intent(out) :: velEnd ! true if all velocity data have been read
       logical, save :: first = .true.
+      character(2000) :: line
       integer :: n ! node counter
 
       velEnd = .false. 
 
       if (first.eqv..true.) then          
+         !write(*,*) 'first' !jgfdebug
          first = .false.
          ndset=1
          TIME=-90.D0
 C . .    READ VELOCITY METADATA
          if (metonly.eqv..false.) then
-            OPEN(UNIT=64,FILE=trim(currentVelocityFile))
-            READ(64,*,END=100) ! skip comment line
+            !write(*,*) 'metonly false' !jgfdebug         
+            OPEN(UNIT=64,FILE=trim(velocityFile))
+            READ(64,*,END=100) line ! skip comment line
+            !write(*,*) trim(line) !jgfdebug
             READ(64,*,END=100) NVTS,n,VTIMINC ! number of datasets, number of nodes, time increment of output 
          endif
          if (nws.ne.0) then
@@ -386,7 +390,11 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
       logical, intent(out) :: velEnd ! true if the file has ended
       integer :: n                   ! mesh node counter
       integer :: l                   ! line counter
+      !character(2000) :: line
+      !
       if (metonly.eqv..false.) then 
+            !READ(64,*,END=100) line ! skip comment line
+            !write(*,*) trim(line) !jgfdebug
          read(64,*,end=100) time    
       endif
       if (nws.ne.0) then
@@ -413,6 +421,300 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
       RETURN
       !================================================================
       END SUBROUTINE READ_VEL_DATASET
+      !================================================================
+
+      !================================================================
+      SUBROUTINE EULER_STEP()
+      !----------------------------------------------------------------------      
+      ! PARTICLE POSITIONS (XP,YP) ARE INPUT AND OUTPUT, PARTICLE POSITIONS
+      ! ARE MOVED BY TAKING A SIMPLE STEP USING EULER'S METHOD 
+      ! I.E. VELOCITY*TIME=DISPLACEMENT
+      ! INPUT INCLUDES NUMBER OF PARTICLES NP, TIMESTEP TS, NODE CONNECTIVITY
+      ! TABLE [NOC], NODAL POSITIONS  {X} AND {Y} AND VELOCITIES {V} , AND 
+      ! PARTICLE ELEMENTAL LOCATIONS {LOCAT}
+      ! FOR DYNAMIC RUNS(DYN=1) {VX} AND {VY} ARE THE VELOCITIES AT THE 
+      ! BEGINNING OF TIME INTERVAL AND {VX2} AND {VY2} ARE AT THE ENC OF THE
+      ! INTERVAL AND THE VELOCITY IS INTERPOLATED LINEARLY IN BETWEEN USING
+      ! FRACTIME AS THE FRACTION OF THE TIME INTERVAL FROM T1 TO T2.
+      !----------------------------------------------------------------------
+      IMPLICIT NONE
+      integer :: p ! particle loop
+      integer :: e ! element loop
+      integer :: n ! node loop around an element
+      DOUBLE PRECISION R,ANG
+      DOUBLE PRECISION VXP,VYP !time+space interpolated velocity at particle position
+      DOUBLE PRECISION VVX(3),VVY(3)
+      LOGICAL L_ISWET
+           
+      DO p=1,NP
+         IF (ITRKING(p).EQV..true.) THEN
+            IF (LOST(p).EQV..false.) THEN
+               e=LOCAT(p)            
+               IF (DYN.EQ.1) THEN
+C . . . . . . . . INTERPOLATE VELOCITIES IN TIME FOR DYNAMIC SIMULATION 
+                  DO n=1,3
+                     VVX(n)=VX(NOC(n,e))+(VX2(NOC(n,e))-VX(NOC(n,e)))
+     &                                                     *FRACTIME
+                     VVY(n)=VY(NOC(n,e))+(VY2(NOC(n,e))-VY(NOC(n,e)))
+     &                                                     *FRACTIME
+                  END DO
+               ELSE   
+C . . . . . . . . USE THE STEADY STATE VELOCITIES                    
+                  DO n=1,3
+                     VVX(n)=VX(NOC(n,e))
+                     VVY(n)=VY(NOC(n,e))
+                  END DO
+               END IF
+C . . . . . . .GET THE X-VELOCITY AT THE PARTICLE POSITION
+               CALL VELINTRP(X(NOC(1,e)),Y(NOC(1,e)),VVX(1),
+     &                 X(NOC(2,e)),Y(NOC(2,e)),VVX(2),
+     &                 X(NOC(3,e)),Y(NOC(3,e)),VVX(3),     
+     &                         XP(p),YP(p),VXP)
+ 
+C . . . . . . .GET THE Y-VELOCITY AT THE PARTICLE POSITION      
+               CALL VELINTRP(X(NOC(1,e)),Y(NOC(1,e)),VVY(1),
+     &                 X(NOC(2,e)),Y(NOC(2,e)),VVY(2),
+     &                 X(NOC(3,e)),Y(NOC(3,e)),VVY(3),     
+     &                         XP(p),YP(p),VYP)   
+         !write(*,*) p,vxp,vyp !jgfdebug
+C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT 
+C . .    AND ORIGINAL POSITION
+C . .    DON'T DIFFUSE IF IN A DRY ELEMENT
+C . .    DO STILL ALLOW MOVEMENT IN A DRY ELEMENT WITHOUT DIFFUSION DEPENDING
+C . .    ON THE VELOCITY OF ANY WET NODES IN THE ELEMENT, WHICH SHOULD
+C . .    HELP PARTICLES FROM GETTING STUCK ON A WET/DRY BOUNDARY
+C . .    ASSUME WE'RE IN A DRY ELEMENT IF ANY OF THE NODES HAVE VELOCITY LESS 
+C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
+               L_ISWET=.TRUE.
+               DO n=1,3
+                  IF ((ABS(VVX(n)).LE.EPSILON(VVX(n))).AND.
+     &                  (ABS(VVY(n)).LE.EPSILON(VVY(n)))) THEN
+                     L_ISWET=.FALSE.
+                  END IF
+               END DO
+               !
+               ! @jasonfleming: don't mark them as lost if the associated 
+               ! command line option was set
+               if (keepDryParticles.eqv..false.) then
+                  IF (.NOT.L_ISWET) LOST(p)=.true.
+               endif
+
+               if (L_ISWET.or.diffuseDryParticles) then
+                  IF (EDDY_DIF.GT.0.D0) THEN 
+                     CALL RANDOM_NUMBER(R)
+                     CALL RANDOM_NUMBER(ANG)
+                     ANG=6.28318530717959D0*ANG
+                     R=R*(EDDY_DIF*TS)**0.5D0
+                     XP(p)=XP(p)+VXP*TS + R * COS(ANG)
+                     YP(p)=YP(p)+VYP*TS + R * SIN(ANG)
+                  ELSE
+                     XP(p)=XP(p)+VXP*TS 
+                     YP(p)=YP(p)+VYP*TS 
+                  END IF
+               ENDIF
+            END IF !LOST
+         END IF !TRACKING
+      END DO   
+      
+      RETURN
+      END SUBROUTINE EULER_STEP
+      !================================================================
+
+      !================================================================
+      SUBROUTINE RK2_STEP()
+      !----------------------------------------------------------------------
+      ! THIS SUBROUTINE USES THE 2ND ORDER RUNGE-KUTTA INTEGRATION METHOD 
+      ! TO ADVANCE THE PARTICLE POSTIONS OVER ONE TIME STEP, IN ADDITION
+      ! TO THE INPUT ARGUMENTS NEEDED FOR EULER_STEP() THIS ONE ALSO
+      ! NEEDS THE EL2EL AND NOD2EL TABLES.
+      !----------------------------------------------------------------------
+      IMPLICIT NONE
+      LOGICAL L_ISWET
+      DOUBLE PRECISION VVX(3),VVY(3)   ! time interpolated nodal velocities around an element
+      DOUBLE PRECISION R,ANG
+      DOUBLE PRECISION VXP,VYP ! time/space interpolated velocity at particle positions
+      real*8 eddy_dif_temp
+
+      integer :: p ! particle loop
+      integer :: e ! element loop
+      integer :: n ! node loop around an element
+      integer :: eno ! jgfdebug: element where particle was not found
+      
+C . . SAVE THE STARTING POSITIONS 
+      DO p=1,NP
+         IF (LOST(p).EQV..false.) THEN
+            XXP(p)=XP(p)
+            YYP(p)=YP(p)
+         END IF
+      END DO
+      
+CC      WRITE(*,*)'STARTING POSITION SAVED'
+      
+C . . DO AN EULER STEP AS A FIRST GUESS
+C . . FOR THIS CALL DIFFUSIVITY IS SET TO ZERO
+      eddy_dif_temp = eddy_dif
+      eddy_dif = 0.d0
+      CALL EULER_STEP()
+      eddy_dif = eddy_dif_temp
+
+CC      WRITE(*,*)'EULER GUESS COMPLETED'
+     
+C . . relocate particle to the midpoint of the Euler path
+      DO p=1,NP
+         IF (LOST(p).EQV..false.) THEN
+            XP(p)=(XXP(p)+XP(p))*0.5d0
+            YP(p)=(YYP(p)+YP(p))*0.5d0
+         END IF
+      END DO
+      
+CC      WRITE(*,*)'MIDPOINT CALCULATED'
+C----------------------------------------------------------------------      
+C . . CHECK LOCAT OF MIDPOINT
+      DO p=1,NP 
+!          WRITE(*,'(a,i0,a,l,a,l)') 
+!     &              'particle ',p,' itrking ',
+!     &              itrking(p),' lost ',lost(p) !jgfdebug
+         IF (ITRKING(p).EQV..true.) THEN
+            IF (LOST(p).EQV..false.) THEN    
+               CALL LOCAT_CHK(p,locat(p))
+               !WRITE(*,*)'MIDPOINT CHECKED, PARTICLE ',p
+               IF (FOUND(p).EQV..false.) THEN
+                  eno=locat(p)
+                  CALL UPDATE_LOCAT(p, locat(p))
+!                  WRITE(*,'(a,i0,a,i0,a,i0)') 
+!     &              'particle ',p,' updated element from ',
+!     &              eno,' to ',locat(p) !jgfdebug
+                  if (lost(p).eqv..true.) then
+                     XP(p)=-99999.d0
+                     YP(p)=-99999.d0
+                     locat(p)=0
+                  endif
+               ELSE
+                 ! WRITE(*,*)'ELEMENT UNCHANGED, PARTICLE ',p !jgfdebug            
+               END IF
+            END IF
+         END IF
+      END DO 
+C----------------------------------------------------------------------         
+      
+C . . GET THE VELOCITY AT THE MIDPOINT        
+      DO p=1,NP
+         IF (ITRKING(p).EQV..true.) THEN
+            IF (LOST(p).EQV..false.) THEN   
+               e=LOCAT(p)
+               IF (DYN.EQ.1) THEN
+C . . . . . .INTERPOLATE VELOCITIES IN TIME FOR DYNAMIC SIMULATION 
+                  DO n=1,3
+                     VVX(n)=VX(NOC(n,e))+(VX2(NOC(n,e))-VX(NOC(n,e)))
+     &                                                     *FRACTIME
+                     VVY(n)=VY(NOC(n,e))+(VY2(NOC(n,e))-VY(NOC(n,e)))
+     &                                                     *FRACTIME
+                  END DO
+               ELSE   
+C . . . . . .USE THE STEADY STATE VELOCITIES                    
+                  DO n=1,3
+                     VVX(n)=VX(NOC(n,e))
+                     VVY(n)=VY(NOC(n,e))
+                  END DO
+               END IF    
+cc         WRITE(*,*)'IM AT LINE 359'
+C . . . .GET THE X-VELOCITY AT THE MIDPOINT
+               CALL VELINTRP(X(NOC(1,e)),Y(NOC(1,e)),VVX(1),
+     &                 X(NOC(2,e)),Y(NOC(2,e)),VVX(2),
+     &                 X(NOC(3,e)),Y(NOC(3,e)),VVX(3),     
+     &                         XP(p),YP(p),VXP)
+ 
+C . . . .GET THE Y-VELOCITY AT THE MIDPOINT      
+               CALL VELINTRP(X(NOC(1,e)),Y(NOC(1,e)),VVY(1),
+     &                 X(NOC(2,e)),Y(NOC(2,e)),VVY(2),
+     &                 X(NOC(3,e)),Y(NOC(3,e)),VVY(3),     
+     &                         XP(p),YP(p),VYP)   
+
+                
+C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT AND ORIGINAL POSITION
+C . .    DON'T DIFFUSE IF IN A DRY ELEMENT
+               ! 
+               ! @jasonfleming: seems like diffusion in a dry
+               ! element should be constrained to be orthogonal to 
+               ! (and in the direction of) the nearest wet edge 
+               ! 
+C . .    DO STILL ALLOW MOVEMENT IN A DRY ELEMENT WITHOUT DIFFUSION DEPENDING
+C . .    ON THE VELOCOITY OF ANY WET NODES IN THE ELEMENT, WHICH SHOULD
+C . .    HELP PARTICLES FROM GETTING STUCK ON A WET/DRY BOUNDARY
+C . .    ASSUME WE'RE IN A DRY ELEMENT IF ANY OF THE NODES HAVE VELOCITY LESS 
+C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
+               ! 
+               ! @jasonfleming: alternatively we could load the fort.63 to see if 
+               ! any of the 3 nodes are dry rather than look at velocity
+               L_ISWET=.TRUE.
+               DO n=1,3
+                  IF ((ABS(VVX(n)).LE.EPSILON(VVX(n))).AND.
+     &          (ABS(VVY(n)).LE.EPSILON(VVY(n)))) THEN
+                     L_ISWET=.FALSE.
+                  END IF
+               END DO
+               !
+               ! @jasonfleming: don't mark them as lost if the associated 
+               ! command line option was set
+               if (keepDryParticles.eqv..false.) then
+                  IF (.NOT.L_ISWET) LOST(p)=.true.
+               endif
+
+               if (L_ISWET.or.diffuseDryParticles) then
+                  IF (EDDY_DIF.GT.0.D0) THEN 
+                     CALL RANDOM_NUMBER(R)
+                     CALL RANDOM_NUMBER(ANG)
+                     ANG=6.28318530717959D0*ANG
+                     R=R*(EDDY_DIF*TS)**0.5D0
+                     XP(p)=XP(p)+VXP*TS + R * COS(ANG)
+                     YP(p)=YP(p)+VYP*TS + R * SIN(ANG)
+                  ELSE
+                     XP(p)=XP(p)+VXP*TS 
+                     YP(p)=YP(p)+VYP*TS 
+                  END IF
+               endif
+            END IF
+         END IF
+      END DO                 
+      
+      RETURN
+      END SUBROUTINE RK2_STEP
+      !================================================================
+
+      !================================================================
+      SUBROUTINE LOCAT_CHK(p, e)
+      !----------------------------------------------------------------------
+      ! THIS SUBROUTINE CHECKS IF A PARTICLE RESIDES WITHIN THE ELEMENT LOCAT
+      ! IT RETURNS THE VALUE FOUND=1 IF THE PARTICLE IS FOUND OR FOUND=0 IF 
+      ! IT WAS NOT FOUND. LOCAT,XP,YP ARE SCALAR INPUT. 
+      !----------------------------------------------------------------------
+      IMPLICIT NONE      
+      INTEGER :: e ! the element that the particle might be in
+      INTEGER :: p ! the particle under consideration
+      DOUBLE PRECISION DS1(2),DS2(2),DS3(2),CROSS,C1,C2,C3
+      
+      FOUND(p) = .false.
+      IF (e.EQ.0) THEN
+         RETURN 
+      ENDIF
+             
+C . . GET DISPLACEMENTS FROM PARTICLE TO NODES    
+      DS1(1)=X(NOC(1,e))-XP(p)
+      DS1(2)=Y(NOC(1,e))-YP(p)
+      DS2(1)=X(NOC(2,e))-XP(p)
+      DS2(2)=Y(NOC(2,e))-YP(p)
+      DS3(1)=X(NOC(3,e))-XP(p)
+      DS3(2)=Y(NOC(3,e))-YP(p)
+
+C . . ALL + CROSS PRODS. MEANS PART. IS FOUND IF NOC IS ANTI-CLOCKWISE      
+      C1=CROSS(DS1,DS2)
+      C2=CROSS(DS2,DS3)
+      C3=CROSS(DS3,DS1)
+       
+      IF ((C1.GE.0).AND.(C2.GE.0).AND.(C3.GE.0)) FOUND(p)=.true.
+      
+      RETURN
+      END SUBROUTINE LOCAT_CHK
       !================================================================
       
       !________________________________________________________________
@@ -442,7 +744,121 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
       RETURN
       !----------------------------------------------------------------
       END SUBROUTINE VELINTRP
-      !----------------------------------------------------------------
+      !================================================================           
+
+      !================================================================
+      SUBROUTINE UPDATE_LOCAT(p, e)
+      !----------------------------------------------------------------------
+      ! THIS SUBROUTINE REQUIRES SCALAR INPUT OF PARTICLE POSITION AND LOCAT  
+      ! IT SEARCHES THE EL2EL TABLE AND NOD2EL TABLE, 
+      ! IT MAY RETURN A NEW VALUE LOCAT AND WILL RETURN LOST=.true. IF PARTICLE 
+      ! LEAVES BOUNDARY OR SKIPS A NODE/ELEMENT GROUP
+      !----------------------------------------------------------------------
+      implicit none     
+      integer, intent(in) :: p    ! particle under consideration
+      integer, intent(inout) :: e ! element where particle is/was
+      integer :: neighborElementIndex ! index of element around a particular node
+      integer :: newElement ! element where particle might be
+      integer :: closest    ! closest node to a particular point
+      double precision ds(3)! distances of three nodes in an element to particular point
+
+      !INTEGER BEL1,BEL2
+      !INTEGER ICNT,NODS1(3),NODS2(3)
+      !DOUBLE PRECISION DS(3),DSMIN,X1,Y1,X2,Y2
+           
+      ! has the particle moved to an element that shares an edge with 
+      ! the input element e? 
+C . . SEARCH EL2EL. . . . . . . . . . . . . . . . . . . . . . . . . . .
+      DO neighborElementIndex=1,3
+          newElement=EL2EL(neighborElementIndex,e) 
+          IF (newElement.EQ.0) EXIT ! run out of candidates; assume zeroes to the right always?     
+          CALL LOCAT_CHK(p, newElement)
+          IF (FOUND(p).EQV..true.) THEN 
+             locat(p)=newElement
+             e=newElement
+             RETURN
+          END IF   
+      END DO
+
+C . . IF IT WAS NOT FOUND IN EL2EL SEARCH NOD2EL. . . . . . . . . . . .
+
+C . . FIND THE CLOSEST NODE . . . . . . . . . . . . . . . . . . . . . .
+      DS(1)=(X(NOC(1,e))-XP(p))**2 + (Y(NOC(1,e))-YP(p))**2
+      DS(2)=(X(NOC(2,e))-XP(p))**2 + (Y(NOC(2,e))-YP(p))**2
+      DS(3)=(X(NOC(3,e))-XP(p))**2 + (Y(NOC(3,e))-YP(p))**2
+      closest=noc(minloc(ds,1),e)     
+      !
+      ! check all the elements around the closest node
+      DO neighborElementIndex=1,12
+         newElement=NOD2EL(neighborElementIndex,closest)
+         IF (newElement.EQ.0) EXIT ! we've run out of candidates
+         CALL LOCAT_CHK(p, newElement) 
+         IF (FOUND(p).EQV..true.) THEN
+            e=newElement
+            locat(p)=newElement
+            RETURN
+         END IF
+      END DO
+      
+C . . STILL NOT FOUND,. . . . . . . . . . . . . . . . . . . . . . . . .
+
+      ! @jasonfleming: try just searching every element like we did 
+      ! in the initial particle search ... if we don't find it that
+      ! way, then mark it as permanently lost
+      write(*,*) 'searching for particle ',p !jgfdebug
+      do e=1,ne
+         call locat_chk(p,e) ! particle, element 
+         if (found(p).eqv..true.) then
+            locat(p)=e
+            write(*,*) 'particle ',p,' was found in element ',e !jgfdebug
+            exit
+         end if
+      end do
+      if (found(p).eqv..false.) then
+         write(*,*) 'particle ',p,' cannot be found' !jgfdebug
+         locat(p)=0
+         xp(p)=-99999.d0
+         yp(p)=-99999.d0
+         lost(p)=.true.         
+      endif
+
+C . . IT MUST HAVE LEFT BOUNDARY OR SKIPPED AN ELEMENT NODE GROUP . . . 
+C . . FIND THE ELEMENTS AROUND CLOSEST THAT HAVE ONLY TWO NEIGHBORS . .
+
+c       LOST=1
+c instead just put it at the closest node
+       !XP=X(CLOSEST)
+       !YP=Y(CLOSEST)
+
+c      BEL1=0
+c      BEL2=0
+c      ICNT=0
+c      DO I=1,12
+c         K=NOD2EL(I,CLOSEST)
+c         IF (K.EQ.0) GOTO 80
+c         IF ( (NOC(3,K).EQ.0) .AND. (BEL1.EQ.0) ) BEL1=K
+c         IF ( (NOC(3,K).EQ.0) .AND. (BEL1.NE.0) ) BEL2=K
+c      END DO
+c 80   CONTINUE
+C . . IF THE CLOSEST NODE IS NOT ON THE BOUNDARY...  
+C      IF (BEL2.EQ.0) THEN
+C         IF (BEL1.EQ.0) THEN
+C             LOST=1
+C             GOTO 100
+C         END IF
+C . . . .FIND THE POSITIONS OF THE OTHER TWO NODES IN BEL1          
+         
+C      END IF
+
+C . . FIND THE NODES WHICH ARE ON EITHER SIDE OF CLOSEST ON THE BOUNDARY            
+C      DO I=1,3
+C         NODS1(I)=NOC(I,BEL1)
+C         NODS2(I)=NOC(I,BEL2)
+C      END DO
+
+      RETURN
+      END SUBROUTINE UPDATE_LOCAT
+      !================================================================
 
       !________________________________________________________________
       !================================================================
@@ -513,7 +929,7 @@ C----------------------------------------------------------------------
       maureParticleOutputFile = 'MAUREPT.OUT'      
       elementLookupTableFile = 'EL2EL.TBL'
       nodeLookupTableFile = 'NODE2EL.TBL'
-      currentVelocityFile = 'FORT.64'
+      velocityFile = 'FORT.64'
       windVelocityFile = 'FORT.74'
       keepDryParticles = .false.
       diffuseDryParticles = .false.
@@ -550,6 +966,16 @@ C----------------------------------------------------------------------
                   call getarg(i, cmdlinearg)
                   call echoCmdLineOpt(cmdlineopt,cmdlinearg)
                   velocityFile = trim(cmdlinearg)
+               case("--elementlookuptablefile")
+                  i = i + 1
+                  call getarg(i, cmdlinearg)
+                  call echoCmdLineOpt(cmdlineopt,cmdlinearg)
+                  elementLookupTableFile = trim(cmdlinearg)
+               case("--nodelookuptablefile")
+                  i = i + 1
+                  call getarg(i, cmdlinearg)
+                  call echoCmdLineOpt(cmdlineopt,cmdlinearg)
+                  nodeLookupTableFile = trim(cmdlinearg)
                case("--windvelocityfile")
                   i = i + 1
                   call getarg(i, cmdlinearg)
@@ -750,309 +1176,6 @@ C======================================================================
 
 C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
-C______________________________________________________________________
-C======================================================================
-      SUBROUTINE EULER_STEP()
-C----------------------------------------------------------------------      
-C PARTICLE POSITIONS (XP,YP) ARE INPUT AND OUTPUT, PARTICLE POSITIONS
-C ARE MOVED BY TAKING A SIMPLE STEP USING EULER'S METHOD 
-C I.E. VELOCITY*TIME=DISPLACEMENT
-C INPUT INCLUDES NUMBER OF PARTICLES NP, TIMESTEP TS, NODE CONNECTIVITY
-C TABLE [NOC], NODAL POSITIONS  {X} AND {Y} AND VELOCITIES {V} , AND 
-C PARTICLE ELEMENTAL LOCATIONS {LOCAT}
-C FOR DYNAMIC RUNS(DYN=1) {VX} AND {VY} ARE THE VELOCITIES AT THE 
-C BEGINNING OF TIME INTERVAL AND {VX2} AND {VY2} ARE AT THE ENC OF THE
-C INTERVAL AND THE VELOCITY IS INTERPOLATED LINEARLY IN BETWEEN USING
-C FRACTIME AS THE FRACTION OF THE TIME INTERVAL FROM T1 TO T2.
-C----------------------------------------------------------------------
-      USE MAUREPARAMS
-      IMPLICIT NONE
-      integer :: p ! particle loop
-      integer :: e ! element loop
-      integer :: n ! node loop around an element
-      DOUBLE PRECISION R,ANG
-      DOUBLE PRECISION VXP,VYP !time+space interpolated velocity at particle position
-      DOUBLE PRECISION VVX(3),VVY(3)
-      LOGICAL L_ISWET
-           
-      DO p=1,NP
-         IF (ITRKING(p).EQV..true.) THEN
-            IF (LOST(p).EQV..false.) THEN
-               e=LOCAT(p)            
-               IF (DYN.EQ.1) THEN
-C . . . . . . . . INTERPOLATE VELOCITIES IN TIME FOR DYNAMIC SIMULATION 
-                  DO n=1,3
-                     VVX(n)=VX(NOC(n,e))+(VX2(NOC(n,e))-VX(NOC(n,e)))
-     &                                                     *FRACTIME
-                     VVY(n)=VY(NOC(n,e))+(VY2(NOC(n,e))-VY(NOC(n,e)))
-     &                                                     *FRACTIME
-                  END DO
-               ELSE   
-C . . . . . . . . USE THE STEADY STATE VELOCITIES                    
-                  DO n=1,3
-                     VVX(n)=VX(NOC(n,e))
-                     VVY(n)=VY(NOC(n,e))
-                  END DO
-               END IF
-C . . . . . . .GET THE X-VELOCITY AT THE PARTICLE POSITION
-               CALL VELINTRP(X(NOC(1,e)),Y(NOC(1,e)),VVX(1),
-     &                 X(NOC(2,e)),Y(NOC(2,e)),VVX(2),
-     &                 X(NOC(3,e)),Y(NOC(3,e)),VVX(3),     
-     &                         XP(p),YP(p),VXP)
- 
-C . . . . . . .GET THE Y-VELOCITY AT THE PARTICLE POSITION      
-               CALL VELINTRP(X(NOC(1,e)),Y(NOC(1,e)),VVY(1),
-     &                 X(NOC(2,e)),Y(NOC(2,e)),VVY(2),
-     &                 X(NOC(3,e)),Y(NOC(3,e)),VVY(3),     
-     &                         XP(p),YP(p),VYP)   
-         !write(*,*) p,vxp,vyp !jgfdebug
-C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT 
-C . .    AND ORIGINAL POSITION
-C . .    DON'T DIFFUSE IF IN A DRY ELEMENT
-C . .    DO STILL ALLOW MOVEMENT IN A DRY ELEMENT WITHOUT DIFFUSION DEPENDING
-C . .    ON THE VELOCITY OF ANY WET NODES IN THE ELEMENT, WHICH SHOULD
-C . .    HELP PARTICLES FROM GETTING STUCK ON A WET/DRY BOUNDARY
-C . .    ASSUME WE'RE IN A DRY ELEMENT IF ANY OF THE NODES HAVE VELOCITY LESS 
-C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
-               L_ISWET=.TRUE.
-               DO n=1,3
-                  IF ((ABS(VVX(n)).LE.EPSILON(VVX(n))).AND.
-     &                  (ABS(VVY(n)).LE.EPSILON(VVY(n)))) THEN
-                     L_ISWET=.FALSE.
-                  END IF
-               END DO
-               !
-               ! @jasonfleming: don't mark them as lost if the associated 
-               ! command line option was set
-               if (keepDryParticles.eqv..false.) then
-                  IF (.NOT.L_ISWET) LOST(p)=.true.
-               endif
-
-               if (L_ISWET.or.diffuseDryParticles) then
-                  IF (EDDY_DIF.GT.0.D0) THEN 
-                     CALL RANDOM_NUMBER(R)
-                     CALL RANDOM_NUMBER(ANG)
-                     ANG=6.28318530717959D0*ANG
-                     R=R*(EDDY_DIF*TS)**0.5D0
-                     XP(p)=XP(p)+VXP*TS + R * COS(ANG)
-                     YP(p)=YP(p)+VYP*TS + R * SIN(ANG)
-                  ELSE
-                     XP(p)=XP(p)+VXP*TS 
-                     YP(p)=YP(p)+VYP*TS 
-                  END IF
-               ENDIF
-            END IF !LOST
-         END IF !TRACKING
-      END DO   
-      
-      RETURN
-      END SUBROUTINE EULER_STEP
-C======================================================================
-
-C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
-
-C______________________________________________________________________
-C======================================================================
-      SUBROUTINE RK2_STEP()
-C----------------------------------------------------------------------
-C THIS SUBROUTINE USES THE 2ND ORDER RUNGE-KUTTA INTEGRATION METHOD 
-C TO ADVANCE THE PARTICLE POSTIONS OVER ONE TIME STEP, IN ADDITION
-C TO THE INPUT ARGUMENTS NEEDED FOR EULER_STEP() THIS ONE ALSO
-C NEEDS THE EL2EL AND NOD2EL TABLES.
-C----------------------------------------------------------------------
-      USE MAUREPARAMS
-      IMPLICIT NONE
-      LOGICAL L_ISWET
-      DOUBLE PRECISION VVX(3),VVY(3)   ! time interpolated nodal velocities around an element
-      DOUBLE PRECISION R,ANG
-      DOUBLE PRECISION VXP,VYP ! time/space interpolated velocity at particle positions
-      real*8 eddy_dif_temp
-
-      integer :: p ! particle loop
-      integer :: e ! element loop
-      integer :: n ! node loop around an element
-      integer :: eno ! jgfdebug: element where particle was not found
-      
-C . . SAVE THE STARTING POSITIONS 
-      DO p=1,NP
-         IF (LOST(p).EQV..false.) THEN
-            XXP(p)=XP(p)
-            YYP(p)=YP(p)
-         END IF
-      END DO
-      
-CC      WRITE(*,*)'STARTING POSITION SAVED'
-      
-C . . DO AN EULER STEP AS A FIRST GUESS
-C . . FOR THIS CALL DIFFUSIVITY IS SET TO ZERO
-      eddy_dif_temp = eddy_dif
-      eddy_dif = 0.d0
-      CALL EULER_STEP()
-      eddy_dif = eddy_dif_temp
-
-CC      WRITE(*,*)'EULER GUESS COMPLETED'
-     
-C . . relocate particle to the midpoint of the Euler path
-      DO p=1,NP
-         IF (LOST(p).EQV..false.) THEN
-            XP(p)=(XXP(p)+XP(p))*0.5d0
-            YP(p)=(YYP(p)+YP(p))*0.5d0
-         END IF
-      END DO
-      
-CC      WRITE(*,*)'MIDPOINT CALCULATED'
-C----------------------------------------------------------------------      
-C . . CHECK LOCAT OF MIDPOINT
-      DO p=1,NP 
-!          WRITE(*,'(a,i0,a,l,a,l)') 
-!     &              'particle ',p,' itrking ',
-!     &              itrking(p),' lost ',lost(p) !jgfdebug
-         IF (ITRKING(p).EQV..true.) THEN
-            IF (LOST(p).EQV..false.) THEN    
-               CALL LOCAT_CHK(p,locat(p))
-               !WRITE(*,*)'MIDPOINT CHECKED, PARTICLE ',p
-               IF (FOUND(p).EQV..false.) THEN
-                  eno=locat(p)
-                  CALL UPDATE_LOCAT(p, locat(p))
-!                  WRITE(*,'(a,i0,a,i0,a,i0)') 
-!     &              'particle ',p,' updated element from ',
-!     &              eno,' to ',locat(p) !jgfdebug
-                  if (lost(p).eqv..true.) then
-                     XP(p)=-99999.d0
-                     YP(p)=-99999.d0
-                     locat(p)=0
-                  endif
-               ELSE
-                 ! WRITE(*,*)'ELEMENT UNCHANGED, PARTICLE ',p !jgfdebug            
-               END IF
-            END IF
-         END IF
-      END DO 
-C----------------------------------------------------------------------         
-      
-C . . GET THE VELOCITY AT THE MIDPOINT        
-      DO p=1,NP
-         IF (ITRKING(p).EQV..true.) THEN
-            IF (LOST(p).EQV..false.) THEN   
-               e=LOCAT(p)
-               IF (DYN.EQ.1) THEN
-C . . . . . .INTERPOLATE VELOCITIES IN TIME FOR DYNAMIC SIMULATION 
-                  DO n=1,3
-                     VVX(n)=VX(NOC(n,e))+(VX2(NOC(n,e))-VX(NOC(n,e)))
-     &                                                     *FRACTIME
-                     VVY(n)=VY(NOC(n,e))+(VY2(NOC(n,e))-VY(NOC(n,e)))
-     &                                                     *FRACTIME
-                  END DO
-               ELSE   
-C . . . . . .USE THE STEADY STATE VELOCITIES                    
-                  DO n=1,3
-                     VVX(n)=VX(NOC(n,e))
-                     VVY(n)=VY(NOC(n,e))
-                  END DO
-               END IF    
-cc         WRITE(*,*)'IM AT LINE 359'
-C . . . .GET THE X-VELOCITY AT THE MIDPOINT
-               CALL VELINTRP(X(NOC(1,e)),Y(NOC(1,e)),VVX(1),
-     &                 X(NOC(2,e)),Y(NOC(2,e)),VVX(2),
-     &                 X(NOC(3,e)),Y(NOC(3,e)),VVX(3),     
-     &                         XP(p),YP(p),VXP)
- 
-C . . . .GET THE Y-VELOCITY AT THE MIDPOINT      
-               CALL VELINTRP(X(NOC(1,e)),Y(NOC(1,e)),VVY(1),
-     &                 X(NOC(2,e)),Y(NOC(2,e)),VVY(2),
-     &                 X(NOC(3,e)),Y(NOC(3,e)),VVY(3),     
-     &                         XP(p),YP(p),VYP)   
-
-                
-C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT AND ORIGINAL POSITION
-C . .    DON'T DIFFUSE IF IN A DRY ELEMENT
-               ! 
-               ! @jasonfleming: seems like diffusion in a dry
-               ! element should be constrained to be orthogonal to 
-               ! (and in the direction of) the nearest wet edge 
-               ! 
-C . .    DO STILL ALLOW MOVEMENT IN A DRY ELEMENT WITHOUT DIFFUSION DEPENDING
-C . .    ON THE VELOCOITY OF ANY WET NODES IN THE ELEMENT, WHICH SHOULD
-C . .    HELP PARTICLES FROM GETTING STUCK ON A WET/DRY BOUNDARY
-C . .    ASSUME WE'RE IN A DRY ELEMENT IF ANY OF THE NODES HAVE VELOCITY LESS 
-C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
-               ! 
-               ! @jasonfleming: alternatively we could load the fort.63 to see if 
-               ! any of the 3 nodes are dry rather than look at velocity
-               L_ISWET=.TRUE.
-               DO n=1,3
-                  IF ((ABS(VVX(n)).LE.EPSILON(VVX(n))).AND.
-     &          (ABS(VVY(n)).LE.EPSILON(VVY(n)))) THEN
-                     L_ISWET=.FALSE.
-                  END IF
-               END DO
-               !
-               ! @jasonfleming: don't mark them as lost if the associated 
-               ! command line option was set
-               if (keepDryParticles.eqv..false.) then
-                  IF (.NOT.L_ISWET) LOST(p)=.true.
-               endif
-
-               if (L_ISWET.or.diffuseDryParticles) then
-                  IF (EDDY_DIF.GT.0.D0) THEN 
-                     CALL RANDOM_NUMBER(R)
-                     CALL RANDOM_NUMBER(ANG)
-                     ANG=6.28318530717959D0*ANG
-                     R=R*(EDDY_DIF*TS)**0.5D0
-                     XP(p)=XP(p)+VXP*TS + R * COS(ANG)
-                     YP(p)=YP(p)+VYP*TS + R * SIN(ANG)
-                  ELSE
-                     XP(p)=XP(p)+VXP*TS 
-                     YP(p)=YP(p)+VYP*TS 
-                  END IF
-               endif
-            END IF
-         END IF
-      END DO                 
-      
-      RETURN
-      END SUBROUTINE RK2_STEP
-C======================================================================
-
-C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
-
-C______________________________________________________________________
-C======================================================================
-      SUBROUTINE LOCAT_CHK(p, e)
-      USE MAUREPARAMS
-C----------------------------------------------------------------------
-C THIS SUBROUTINE CHECKS IF A PARTICLE RESIDES WITHIN THE ELEMENT LOCAT
-C IT RETURNS THE VALUE FOUND=1 IF THE PARTICLE IS FOUND OR FOUND=0 IF 
-C IT WAS NOT FOUND. LOCAT,XP,YP ARE SCALAR INPUT. 
-C----------------------------------------------------------------------
-      IMPLICIT NONE      
-      INTEGER :: e ! the element that the particle might be in
-      INTEGER :: p ! the particle under consideration
-      DOUBLE PRECISION DS1(2),DS2(2),DS3(2),CROSS,C1,C2,C3
-      
-      FOUND(p) = .false.
-      IF (e.EQ.0) THEN
-         RETURN 
-      ENDIF
-             
-C . . GET DISPLACEMENTS FROM PARTICLE TO NODES    
-      DS1(1)=X(NOC(1,e))-XP(p)
-      DS1(2)=Y(NOC(1,e))-YP(p)
-      DS2(1)=X(NOC(2,e))-XP(p)
-      DS2(2)=Y(NOC(2,e))-YP(p)
-      DS3(1)=X(NOC(3,e))-XP(p)
-      DS3(2)=Y(NOC(3,e))-YP(p)
-
-C . . ALL + CROSS PRODS. MEANS PART. IS FOUND IF NOC IS ANTI-CLOCKWISE      
-      C1=CROSS(DS1,DS2)
-      C2=CROSS(DS2,DS3)
-      C3=CROSS(DS3,DS1)
-       
-      IF ((C1.GE.0).AND.(C2.GE.0).AND.(C3.GE.0)) FOUND(p)=.true.
-      
-      RETURN
-      END SUBROUTINE LOCAT_CHK
-C======================================================================
 C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 C______________________________________________________________________
 C======================================================================
@@ -1072,120 +1195,6 @@ C======================================================================
 
 C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
-C______________________________________________________________________
-C======================================================================
-      SUBROUTINE UPDATE_LOCAT(p, e)
-C----------------------------------------------------------------------
-C THIS SUBROUTINE REQUIRES SCALAR INPUT OF PARTICLE POSITION AND LOCAT  
-C IT SEARCHES THE EL2EL TABLE AND NOD2EL TABLE, 
-C IT MAY RETURN A NEW VALUE LOCAT AND WILL RETURN LOST=.true. IF PARTICLE 
-C LEAVES BOUNDARY OR SKIPS A NODE/ELEMENT GROUP
-C----------------------------------------------------------------------
-      use maureparams
-      implicit none     
-      integer, intent(in) :: p    ! particle under consideration
-      integer, intent(inout) :: e ! element where particle is/was
-      integer :: neighborElementIndex ! index of element around a particular node
-      integer :: newElement ! element where particle might be
-      integer :: closest    ! closest node to a particular point
-      double precision ds(3)! distances of three nodes in an element to particular point
-
-      !INTEGER BEL1,BEL2
-      !INTEGER ICNT,NODS1(3),NODS2(3)
-      !DOUBLE PRECISION DS(3),DSMIN,X1,Y1,X2,Y2
-           
-      ! has the particle moved to an element that shares an edge with 
-      ! the input element e? 
-C . . SEARCH EL2EL. . . . . . . . . . . . . . . . . . . . . . . . . . .
-      DO neighborElementIndex=1,3
-          newElement=EL2EL(neighborElementIndex,e) 
-          IF (newElement.EQ.0) EXIT ! run out of candidates; assume zeroes to the right always?     
-          CALL LOCAT_CHK(p, newElement)
-          IF (FOUND(p).EQV..true.) THEN 
-             locat(p)=newElement
-             e=newElement
-             RETURN
-          END IF   
-      END DO
-
-C . . IF IT WAS NOT FOUND IN EL2EL SEARCH NOD2EL. . . . . . . . . . . .
-
-C . . FIND THE CLOSEST NODE . . . . . . . . . . . . . . . . . . . . . .
-      DS(1)=(X(NOC(1,e))-XP(p))**2 + (Y(NOC(1,e))-YP(p))**2
-      DS(2)=(X(NOC(2,e))-XP(p))**2 + (Y(NOC(2,e))-YP(p))**2
-      DS(3)=(X(NOC(3,e))-XP(p))**2 + (Y(NOC(3,e))-YP(p))**2
-      closest=noc(minloc(ds,1),e)     
-      !
-      ! check all the elements around the closest node
-      DO neighborElementIndex=1,12
-         newElement=NOD2EL(neighborElementIndex,closest)
-         IF (newElement.EQ.0) EXIT ! we've run out of candidates
-         CALL LOCAT_CHK(p, newElement) 
-         IF (FOUND(p).EQV..true.) THEN
-            e=newElement
-            locat(p)=newElement
-            RETURN
-         END IF
-      END DO
-      
-C . . STILL NOT FOUND,. . . . . . . . . . . . . . . . . . . . . . . . .
-
-      ! @jasonfleming: try just searching every element like we did 
-      ! in the initial particle search ... if we don't find it that
-      ! way, then mark it as permanently lost
-      write(*,*) 'searching for particle ',p !jgfdebug
-      do e=1,ne
-         call locat_chk(p,e) ! particle, element 
-         if (found(p).eqv..true.) then
-            locat(p)=e
-            write(*,*) 'particle ',p,' was found in element ',e !jgfdebug
-            exit
-         else 
-            write(*,*) 'particle ',p,' cannot be found' !jgfdebug
-            locat(p)=0
-            xp(p)=-99999.d0
-            yp(p)=-99999.d0
-            lost(p)=.true.         
-         end if
-      end do
-
-C . . IT MUST HAVE LEFT BOUNDARY OR SKIPPED AN ELEMENT NODE GROUP . . . 
-C . . FIND THE ELEMENTS AROUND CLOSEST THAT HAVE ONLY TWO NEIGHBORS . .
-
-c       LOST=1
-c instead just put it at the closest node
-       !XP=X(CLOSEST)
-       !YP=Y(CLOSEST)
-
-c      BEL1=0
-c      BEL2=0
-c      ICNT=0
-c      DO I=1,12
-c         K=NOD2EL(I,CLOSEST)
-c         IF (K.EQ.0) GOTO 80
-c         IF ( (NOC(3,K).EQ.0) .AND. (BEL1.EQ.0) ) BEL1=K
-c         IF ( (NOC(3,K).EQ.0) .AND. (BEL1.NE.0) ) BEL2=K
-c      END DO
-c 80   CONTINUE
-C . . IF THE CLOSEST NODE IS NOT ON THE BOUNDARY...  
-C      IF (BEL2.EQ.0) THEN
-C         IF (BEL1.EQ.0) THEN
-C             LOST=1
-C             GOTO 100
-C         END IF
-C . . . .FIND THE POSITIONS OF THE OTHER TWO NODES IN BEL1          
-         
-C      END IF
-
-C . . FIND THE NODES WHICH ARE ON EITHER SIDE OF CLOSEST ON THE BOUNDARY            
-C      DO I=1,3
-C         NODS1(I)=NOC(I,BEL1)
-C         NODS2(I)=NOC(I,BEL2)
-C      END DO
-
-      RETURN
-      END SUBROUTINE UPDATE_LOCAT
-C======================================================================   
 
 C||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
