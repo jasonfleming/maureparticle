@@ -180,43 +180,43 @@ the particle may get "lost".
 
 # Maureparticle Command Line Options
 
-`**--maureparameterinputfile**` *file* : Name of the file that contains the
+`--maureparameterinputfile file` : Name of the file that contains the
         parameters that control the particle tracking physics as well as the
         initial starting positions and release times for each particle. Default
         value is `PARTICLES.INP` (all caps). 
 
-`**--elementlookuptablefile**` *file* : Name of the file that contains the lookup
+`--elementlookuptablefile file` : Name of the file that contains the lookup
         table for the elements that share an edge with each element (max 
         three possible neighbors). Default name is `EL2EL.TBL` (all caps). 
         This file is produced by the `buildTables.pl` perl script using the mesh 
         file (fort.14).    
 
-`**--nodelookuptablefile**` *file* : Name of the file that contains the lookup
+`--nodelookuptablefile file` : Name of the file that contains the lookup
         table for the elements surrounding a node (max 12 possible neighbors).
         Default name is `NODE2EL.TBL` (all caps). This file is produced
         by the `buildTables.pl` perl script using the mesh file (fort.14).
 
-`**--meshfile**` *file* : Name of the mesh file. Default name is `FORT.14` (all caps).
+`--meshfile file` : Name of the mesh file. Default name is `FORT.14` (all caps).
 
-`**--velocityfile**` *file* : Name of the water current velocity file. Default
+`--velocityfile file` : Name of the water current velocity file. Default
         name is `FORT.64` (all caps). 
 
-`**--windvelocityfile**` *file* : Name of the wind velocity file. Default name 
+`--windvelocityfile file` : Name of the wind velocity file. Default name 
         is `FORT.74` (all caps).
 
-`**--maureparticleoutputfile**` *file* : Name of the output file. Default name is
+`--maureparticleoutputfile file` : Name of the output file. Default name is
         `MAUREPT.OUT` (all caps). 
 
-`**--metonly**` If this option is included, only the wind file will be
+`--metonly` If this option is included, only the wind file will be
         used as the driving velocity for the particles (the water current
         velocity will not be opened or read).
 
-`**--keep-dry-particles**` If this option is included, then particles will not be 
+`--keep-dry-particles` If this option is included, then particles will not be 
         considered lost if they end up in a dry element. By default, particles
         that stray into a dry element will be marked lost and will no longer be
         tracked. 
 
-`**--diffuse-dry-particles**` If this option is included, then particles in dry
+`--diffuse-dry-particles` If this option is included, then particles in dry
         areas will continue to have a random diffusion velocity. By default,
         particles in dry areas will have diffusion turned off (even if tracking
         continues).
