@@ -548,8 +548,8 @@ C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
            XP(J)=XP(J)+VXP*TS + R * COS(ANG)
            YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
          ELSE
-           XP(J)=XP(J)+VXP*TS 
-           YP(J)=YP(J)+VYP*TS 
+           XP(J)=XXP(J)+VXP*TS 
+           YP(J)=YYP(J)+VYP*TS 
          END IF
        END IF
       END IF
