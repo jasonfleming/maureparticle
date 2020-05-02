@@ -180,43 +180,43 @@ the particle may get "lost".
 
 # Maureparticle Command Line Options
 
-**--maureparameterinputfile** *<file>* Name of the file that contains the
+`**--maureparameterinputfile**` *file* : Name of the file that contains the
         parameters that control the particle tracking physics as well as the
         initial starting positions and release times for each particle. Default
-        value is ```PARTICLES.INP``` (all caps). 
+        value is `PARTICLES.INP` (all caps). 
 
-**--elementlookuptablefile** *<file>* Name of the file that contains the lookup
+`**--elementlookuptablefile**` *file* : Name of the file that contains the lookup
         table for the elements that share an edge with each element (max 
-        three possible neighbors). Default name is ```EL2EL.TBL``` (all caps). 
-        This file is produced by the ```buildTables.pl``` perl script using the mesh 
+        three possible neighbors). Default name is `EL2EL.TBL` (all caps). 
+        This file is produced by the `buildTables.pl` perl script using the mesh 
         file (fort.14).    
 
-**--nodelookuptablefile** *<file>* Name of the file that contains the lookup
+`**--nodelookuptablefile**` *file* : Name of the file that contains the lookup
         table for the elements surrounding a node (max 12 possible neighbors).
-        Default name is ```NODE2EL.TBL``` (all caps). This file is produced
-        by the ```buildTables.pl``` perl script using the mesh file (```fort.14```).
+        Default name is `NODE2EL.TBL` (all caps). This file is produced
+        by the `buildTables.pl` perl script using the mesh file (fort.14).
 
-**--meshfile** *<file>* Name of the mesh file. Default name is ```FORT.14``` (all caps).
+`**--meshfile**` *file* : Name of the mesh file. Default name is `FORT.14` (all caps).
 
-**--velocityfile** *<file>* Name of the water current velocity file. Default
-        name is ```FORT.64```. 
+`**--velocityfile**` *file* : Name of the water current velocity file. Default
+        name is `FORT.64` (all caps). 
 
-**--windvelocityfile** *<file>* Name of the wind velocity file. Default name 
-        is ```FORT.74```.
+`**--windvelocityfile**` *file* : Name of the wind velocity file. Default name 
+        is `FORT.74` (all caps).
 
-**--maureparticleoutputfile** *<file>* Name of the output file. Default name is
-        ```MAUREPT.OUT```. 
+`**--maureparticleoutputfile**` *file* : Name of the output file. Default name is
+        `MAUREPT.OUT` (all caps). 
 
-**--metonly** If this option is included, only the wind file will be
+`**--metonly**` If this option is included, only the wind file will be
         used as the driving velocity for the particles (the water current
         velocity will not be opened or read).
 
-**--keep-dry-particles** If this option is included, then particles will not be 
+`**--keep-dry-particles**` If this option is included, then particles will not be 
         considered lost if they end up in a dry element. By default, particles
         that stray into a dry element will be marked lost and will no longer be
         tracked. 
 
-**--diffuse-dry-particles** If this option is included, then particles in dry
+`**--diffuse-dry-particles**` If this option is included, then particles in dry
         areas will continue to have a random diffusion velocity. By default,
         particles in dry areas will have diffusion turned off (even if tracking
         continues).
@@ -225,12 +225,14 @@ the particle may get "lost".
 
 1. Particle tracking is strictly 2D. 
 
-2. Currently the code assumes that all velocity files start and end at the 
+2. All input files and output files are ascii text. 
+
+3. Currently the code assumes that all velocity files start and end at the 
 same time and have the same time increment. 
 
-3. The particle tracking time step must be smaller than the output time increment
+4. The particle tracking time step must be smaller than the output time increment
 as well as the time increment of the underlying velocity data.
 
-4. The output time increment must be an even multiple of the particle tracking
+5. The output time increment must be an even multiple of the particle tracking
 time step. 
 
