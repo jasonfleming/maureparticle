@@ -71,7 +71,7 @@ C
 C
 C
 C--------------------------------------------------------------------- 
-C Copyright (C) 2007, 2008, 2013-2016 Nathan Dill
+C Copyright (C) 2007, 2008, 2013-2016, 2020 Nathan Dill
 C
 C This program  is free software; you can redistribute it and/or
 C modify it under the terms of the GNU General Public License as
@@ -545,8 +545,8 @@ C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
            CALL RANDOM_NUMBER(ANG)
            ANG=6.28318530717959D0*ANG
            R=R*(EDDY_DIF*TS)**0.5D0
-           XP(J)=XP(J)+VXP*TS + R * COS(ANG)
-           YP(J)=YP(J)+VYP*TS + R * SIN(ANG)
+           XP(J)=XXP(J)+VXP*TS + R * COS(ANG)
+           YP(J)=YYP(J)+VYP*TS + R * SIN(ANG)
          ELSE
            XP(J)=XXP(J)+VXP*TS 
            YP(J)=YYP(J)+VYP*TS 
