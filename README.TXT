@@ -3,7 +3,7 @@ To run the Maureparticle example:
 1) Compile the Maureparticle and BUILT_TABLES programs. e.g.
      
     gfortran -o maurept.exe Maureparticle.f
-    gfortran -o buildtables.exe BUILD_TABLES.f, or us buildTables.pl, its faster
+    gfortran -o buildtables.exe BUILD_TABLES.f, or use buildTables.pl, its faster
 
 2) Move the executables and change directory into the example
    directory.
@@ -19,12 +19,17 @@ To run the Maureparticle example:
    generate for large grids (a faster version is in the works).
  
    !!! use buildTables.pl instead, its much faster !!!
+   set PERL5LIB to add the path to your local clone of the ourPerl
+   repository 
+   
+   make symbolic links to all caps file names on linux or case sensitive platform
 
-4) Now run the Maureparticle. It generates a file called 
+4) Now run the Maureparticle executable. It generates a file called 
    MAUREPT.OUT that contains the particle ID, X,Y location, time,
    and the element the particle is in. 
 
-5) run the ParticlesOut_2_kml.pl Perl script to genereate a
+5) install perl GD module 
+   run the ParticlesOut_2_kml.pl Perl script to genereate a
    kmz file to view the results in Google Earth.
 
 6) Check out the PARTICLES.INP input file. Try some different 
