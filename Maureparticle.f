@@ -789,6 +789,9 @@ C . . FIND THE CLOSEST NODE . . . . . . . . . . . . . . . . . . . . . .
       closest=noc(minloc(ds,1),e)     
       !
       ! check all the elements around the closest node
+      ! @jasonfleming: FIXME? Could this be improved by searching the 
+      ! nod2el around each of the three nodes of the locat(p) element instead
+      ! of just the closest node? 
       DO neighborElementIndex=1,12
          newElement=NOD2EL(neighborElementIndex,closest)
          IF (newElement.EQ.0) EXIT ! we've run out of candidates

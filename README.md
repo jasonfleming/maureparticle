@@ -30,10 +30,12 @@ repository](https://github.com/natedill/ourPerl).
 grid with tides and a constant ENE wind. On linux or Mac you may need 
 to make symbolic links in lower case to the all caps file names (e.g. 
 `ln -s FORT.14 fort.14` because ADCIRC will look for lower case 
-filenames on these case-sensitive platforms.
+filenames on these case-sensitive platforms. You can also specify the 
+name of the mesh file (and other files) via command line options as 
+described below. 
 
 5. Now run the Maureparticle executable. It generates a file called 
-MAUREPT.OUT that contains the particle ID, X,Y location, time, and the 
+MAUREPT.OUT (by default) that contains the particle ID, X,Y location, time, and the 
 element the particle is in. 
 
 6. For Google Earth visualization, install the perl GD module and then 
@@ -175,3 +177,60 @@ the particle may get "lost".
           output from a previous simulation, it can save some 
           simulation time by eliminating the need to perform an 
           initial particle search.  
+
+# Maureparticle Command Line Options
+
+**--maureparameterinputfile** *<file>* Name of the file that contains the
+        parameters that control the particle tracking physics as well as the
+        initial starting positions and release times for each particle. Default
+        value is ```PARTICLES.INP``` (all caps). 
+
+**--elementlookuptablefile** *<file>* Name of the file that contains the lookup
+        table for the elements that share an edge with each element (max 
+        three possible neighbors). Default name is ```EL2EL.TBL``` (all caps). 
+        This file is produced by the ```buildTables.pl``` perl script using the mesh 
+        file (fort.14).    
+
+**--nodelookuptablefile** *<file>* Name of the file that contains the lookup
+        table for the elements surrounding a node (max 12 possible neighbors).
+        Default name is ```NODE2EL.TBL``` (all caps). This file is produced
+        by the ```buildTables.pl``` perl script using the mesh file (```fort.14```).
+
+**--meshfile** *<file>* Name of the mesh file. Default name is ```FORT.14``` (all caps).
+
+**--velocityfile** *<file>* Name of the water current velocity file. Default
+        name is ```FORT.64```. 
+
+**--windvelocityfile** *<file>* Name of the wind velocity file. Default name 
+        is ```FORT.74```.
+
+**--maureparticleoutputfile** *<file>* Name of the output file. Default name is
+        ```MAUREPT.OUT```. 
+
+**--metonly** If this option is included, only the wind file will be
+        used as the driving velocity for the particles (the water current
+        velocity will not be opened or read).
+
+**--keep-dry-particles** If this option is included, then particles will not be 
+        considered lost if they end up in a dry element. By default, particles
+        that stray into a dry element will be marked lost and will no longer be
+        tracked. 
+
+**--diffuse-dry-particles** If this option is included, then particles in dry
+        areas will continue to have a random diffusion velocity. By default,
+        particles in dry areas will have diffusion turned off (even if tracking
+        continues).
+
+# Assumptions and Caveats
+
+1. Particle tracking is strictly 2D. 
+
+2. Currently the code assumes that all velocity files start and end at the 
+same time and have the same time increment. 
+
+3. The particle tracking time step must be smaller than the output time increment
+as well as the time increment of the underlying velocity data.
+
+4. The output time increment must be an even multiple of the particle tracking
+time step. 
+
