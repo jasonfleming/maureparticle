@@ -82,7 +82,7 @@ C
 C
 C
 C--------------------------------------------------------------------- 
-C Copyright (C) 2007, 2008, 2013-2016 Nathan Dill
+C Copyright (C) 2007, 2008, 2013-2016, 2020 Nathan Dill
 C Copyright (C) 2020 Jason Fleming
 C
 C This program  is free software; you can redistribute it and/or
@@ -130,10 +130,10 @@ C----------------------------------------------------------------------
       LOGICAL, ALLOCATABLE :: ITRKING(:)!.true. if particle has been released
       INTEGER, ALLOCATABLE :: LOCAT(:) ! index of element containing this PID
       REAL*8, ALLOCATABLE :: RLSTIME(:)  ! release time for the particles 
-      REAL*8, ALLOCATABLE :: XP(:),YP(:)   ! current particle positions
+      REAL*8, ALLOCATABLE :: XP(:),YP(:)   ! current particle positions/T
       DOUBLE PRECISION, ALLOCATABLE, SAVE :: XXP(:),YYP(:) ! rk2 starting particle position        
       
-      REAL*8 TS,RNTIM,OUTPER,TIME,OUTTIME,STDY_TIME,FRACTIME
+      REAL*8 TS,RNTIM,OUTPER,TIME,OUTTIME,STDY_TIME,FRACTIME,NOW
       REAL*8 VTIMINC   ! time incr btw datasets in fort.64 file (according to the header in that file)
       REAL*8 RELEASEPER,VELTIME1,VELTIME2,EDDY_DIF,WFACTOR,SLAM0,SFEA0
       
@@ -150,6 +150,7 @@ C----------------------------------------------------------------------
 
       logical :: keepDryParticles
       logical :: diffuseDryParticles 
+      logical :: steadyState
 
       contains     
       !________________________________________________________________
@@ -201,6 +202,11 @@ C . . GET INFO TO ALLOCATE ARRAYS
      &   " from the command line or make the NWS parameter nonzero."
          stop 1
       endif      
+   
+      ! check if a steady state run was specified
+      if (DYN.EQ.0) then
+         steadyState=.true.
+      endif
      
 C . . FIGURE NUMBER OF TIMESTEPS. . . . . . . . . . . . . . . . . . . .
       NSTEPS=INT(RNTIM/TS)
@@ -221,6 +227,8 @@ C . . INITIALIZE VECTORS. . . . . . . . . . . . . . . . . . . . . .
          LOST(p)=.false.
          LOCAT(p)=0
          FOUND(p)=.false.
+         VX(p)=0.d0        !nld assume velocity is zero at time zero 
+         VY(p)=0.d0
       END DO
 
       wfactor = 0.d0
@@ -329,7 +337,7 @@ c         READ(14,*)K,X(I),Y(I),Z
          !write(*,*) 'first' !jgfdebug
          first = .false.
          ndset=1
-         TIME=-90.D0
+         TIME=-90.D0  !nld - guessing this dont matter as long as TIME .lt. STDY_IIME
 C . .    READ VELOCITY METADATA
          if (metonly.eqv..false.) then
             !write(*,*) 'metonly false' !jgfdebug         
@@ -344,33 +352,24 @@ C . .    READ VELOCITY METADATA
             read(74,*,end=100) nvts,n,vtiminc ! number of datasets, number of nodes, time increment of output 
          endif
          do while (time.lt.stdy_time)
+         write(*,*)'b4 first call of READ_VEL time',time !nlddebug
             call read_vel_dataset(velEnd)
+         write(*,*)'after first call of READ_VEL time',time !nlddebug
          end do
          if (velEnd.eqv..false.) then
             WRITE(*,*) 'VELOCITY DATA READ SUCCESSFULLY'
          endif
 C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES      
       else
-         do n=1,nn
-            vx(n)=vx2(n)
-            vy(n)=vy2(n)      
-         end do
+      ! VX,VY will get advanced within the call to read_vel_dataset
+      !nld   do n=1,nn
+      !nld      vx(n)=vx2(n)
+      !nld      vy(n)=vy2(n)      
+      !nld   end do
+         write(*,*)'b4 later READ_VEL time',time !nlddebug
          call read_vel_dataset(velEnd)
+         write(*,*)'after later READ_VEL time',time !nlddebug
       end if
-      !
-      ! set the particle-driving velocity according to the current,
-      ! wind, or a combination, based on input parameter specifications
-      ! ... the new current velocities are set to vx2 and vy2 in read_vel_dataset 
-      if (metonly.eqv..true.) then
-         vx2(:) = wx(:)
-         vy2(:) = wy(:)
-      else
-         ! blend current velocity with wind velocity if this has been specified 
-         if (nws.ne.0) then
-            vx2(n)=vx2(n)+wfactor*wx(n)  ! apply wind percent (default 0%)
-            vy2(n)=vy2(n)+wfactor*wy(n)
-         endif
-      endif
       return
       !--------------------------------------------------------------
       ! jump to here when attempting to read past the end of the file      
@@ -386,12 +385,18 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
 
       !================================================================
       SUBROUTINE READ_VEL_DATASET(velEnd)
+      ! nld: revise this subroutine so that it returns with 
+      ! both VX,VY and VX2,VY2 that account for the various
+      ! options to just do current, just met, or blended
       IMPLICIT NONE
       logical, intent(out) :: velEnd ! true if the file has ended
       integer :: n                   ! mesh node counter
       integer :: l                   ! line counter
       !character(2000) :: line
       !
+      ! advance VX,VY
+      VX(:)=VX2(:)
+      VY(:)=VY2(:)
       if (metonly.eqv..false.) then 
             !READ(64,*,END=100) line ! skip comment line
             !write(*,*) trim(line) !jgfdebug
@@ -408,6 +413,19 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
             read(74,*) l,wx(n),wy(n)
          endif
       end do
+      ! set the particle-driving velocity according to the current,
+      ! wind, or a combination, based on input parameter specifications
+      ! ... the new current velocities are set to vx2 and vy2 in read_vel_dataset 
+      if (metonly.eqv..true.) then
+         vx2(:) = wx(:)
+         vy2(:) = wy(:)
+      else
+         ! blend current velocity with wind velocity if this has been specified 
+         if (nws.ne.0) then
+            vx2(:)=vx2(:)+wfactor*wx(:)  ! apply wind percent (default 0%)
+            vy2(:)=vy2(:)+wfactor*wy(:)
+         endif
+      endif
       write(6,fmt='(a,f9.1,a)',advance='no')'time[',TIME,']'            
       write(6,fmt='(a,i0,a)',advance='no') '[',ndset,'] '
       ndset=ndset+1  ! jgf: Increment the dataset counter
@@ -445,12 +463,14 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
       DOUBLE PRECISION VXP,VYP !time+space interpolated velocity at particle position
       DOUBLE PRECISION VVX(3),VVY(3)
       LOGICAL L_ISWET
+
+      write(*,*)'inEuler np=',np        !nlddebug
            
       DO p=1,NP
          IF (ITRKING(p).EQV..true.) THEN
             IF (LOST(p).EQV..false.) THEN
                e=LOCAT(p)            
-               IF (DYN.EQ.1) THEN
+!nld               IF (.not.steadyState) THEN
 C . . . . . . . . INTERPOLATE VELOCITIES IN TIME FOR DYNAMIC SIMULATION 
                   DO n=1,3
                      VVX(n)=VX(NOC(n,e))+(VX2(NOC(n,e))-VX(NOC(n,e)))
@@ -458,13 +478,13 @@ C . . . . . . . . INTERPOLATE VELOCITIES IN TIME FOR DYNAMIC SIMULATION
                      VVY(n)=VY(NOC(n,e))+(VY2(NOC(n,e))-VY(NOC(n,e)))
      &                                                     *FRACTIME
                   END DO
-               ELSE   
-C . . . . . . . . USE THE STEADY STATE VELOCITIES                    
-                  DO n=1,3
-                     VVX(n)=VX(NOC(n,e))
-                     VVY(n)=VY(NOC(n,e))
-                  END DO
-               END IF
+!nld               ELSE   
+!nldC . . . . . . . . USE THE STEADY STATE VELOCITIES                    
+!nld                  DO n=1,3
+!                     VVX(n)=VX(NOC(n,e))
+!                     VVY(n)=VY(NOC(n,e))
+!                  END DO
+!nld               END IF
 C . . . . . . .GET THE X-VELOCITY AT THE PARTICLE POSITION
                CALL VELINTRP(X(NOC(1,e)),Y(NOC(1,e)),VVX(1),
      &                 X(NOC(2,e)),Y(NOC(2,e)),VVX(2),
@@ -477,6 +497,10 @@ C . . . . . . .GET THE Y-VELOCITY AT THE PARTICLE POSITION
      &                 X(NOC(3,e)),Y(NOC(3,e)),VVY(3),     
      &                         XP(p),YP(p),VYP)   
          !write(*,*) p,vxp,vyp !jgfdebug
+         write(*,*) 'p,xp,yp',p,XP(p),YP(P) !nlddebug
+         write(*,*) 'Euler vxp,vyp',VXP,VYP !nlddebug
+         write(*,*) 'fractime, vyn1 vy2n1',fractime, VY(NOC(1,e)), 
+     &                       VY2(NOC(1,e))
 C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT 
 C . .    AND ORIGINAL POSITION
 C . .    DON'T DIFFUSE IF IN A DRY ELEMENT
@@ -492,6 +516,7 @@ C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
                      L_ISWET=.FALSE.
                   END IF
                END DO
+          write(*,*)'L_ISWET',L_ISWET ! nlddebug
                !
                ! @jasonfleming: don't mark them as lost if the associated 
                ! command line option was set
@@ -507,9 +532,11 @@ C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
                      R=R*(EDDY_DIF*TS)**0.5D0
                      XP(p)=XP(p)+VXP*TS + R * COS(ANG)
                      YP(p)=YP(p)+VYP*TS + R * SIN(ANG)
+           write(*,*)'Euler Diffusing, p,x,y',p,XP(p),YP(p) !nlddebug
                   ELSE
                      XP(p)=XP(p)+VXP*TS 
                      YP(p)=YP(p)+VYP*TS 
+           write(*,*)'Euler NOT Diffusing, p,x,y',p,XP(p),YP(p) !nlddebug
                   END IF
                ENDIF
             END IF !LOST
@@ -545,10 +572,11 @@ C . . SAVE THE STARTING POSITIONS
          IF (LOST(p).EQV..false.) THEN
             XXP(p)=XP(p)
             YYP(p)=YP(p)
+      write(*,*)'saving starting posion, p,xp,yp',p,XP(p),YP(p) !nlddebug
          END IF
       END DO
       
-CC      WRITE(*,*)'STARTING POSITION SAVED'
+      WRITE(*,*)'STARTING POSITION SAVED'  !nlddebug
       
 C . . DO AN EULER STEP AS A FIRST GUESS
 C . . FOR THIS CALL DIFFUSIVITY IS SET TO ZERO
@@ -557,7 +585,7 @@ C . . FOR THIS CALL DIFFUSIVITY IS SET TO ZERO
       CALL EULER_STEP()
       eddy_dif = eddy_dif_temp
 
-CC      WRITE(*,*)'EULER GUESS COMPLETED'
+      WRITE(*,*)'EULER GUESS COMPLETED' !nlddebug
      
 C . . relocate particle to the midpoint of the Euler path
       DO p=1,NP
@@ -571,9 +599,9 @@ CC      WRITE(*,*)'MIDPOINT CALCULATED'
 C----------------------------------------------------------------------      
 C . . CHECK LOCAT OF MIDPOINT
       DO p=1,NP 
-!          WRITE(*,'(a,i0,a,l,a,l)') 
-!     &              'particle ',p,' itrking ',
-!     &              itrking(p),' lost ',lost(p) !jgfdebug
+          WRITE(*,'(a,i0,a,l,a,l)') 
+     &              'particle ',p,' itrking ',
+     &              itrking(p),' lost ',lost(p) !jgfdebug
          IF (ITRKING(p).EQV..true.) THEN
             IF (LOST(p).EQV..false.) THEN    
                CALL LOCAT_CHK(p,locat(p))
@@ -581,9 +609,9 @@ C . . CHECK LOCAT OF MIDPOINT
                IF (FOUND(p).EQV..false.) THEN
                   eno=locat(p)
                   CALL UPDATE_LOCAT(p, locat(p))
-!                  WRITE(*,'(a,i0,a,i0,a,i0)') 
-!     &              'particle ',p,' updated element from ',
-!     &              eno,' to ',locat(p) !jgfdebug
+                  WRITE(*,'(a,i0,a,i0,a,i0)') 
+     &              'particle ',p,' updated element from ',
+     &              eno,' to ',locat(p) !jgfdebug
                   if (lost(p).eqv..true.) then
                      XP(p)=-99999.d0
                      YP(p)=-99999.d0
@@ -602,7 +630,7 @@ C . . GET THE VELOCITY AT THE MIDPOINT
          IF (ITRKING(p).EQV..true.) THEN
             IF (LOST(p).EQV..false.) THEN   
                e=LOCAT(p)
-               IF (DYN.EQ.1) THEN
+!nld allow steady time to be between outputs just like the starting time IF (.not.steadyState) THEN
 C . . . . . .INTERPOLATE VELOCITIES IN TIME FOR DYNAMIC SIMULATION 
                   DO n=1,3
                      VVX(n)=VX(NOC(n,e))+(VX2(NOC(n,e))-VX(NOC(n,e)))
@@ -610,13 +638,13 @@ C . . . . . .INTERPOLATE VELOCITIES IN TIME FOR DYNAMIC SIMULATION
                      VVY(n)=VY(NOC(n,e))+(VY2(NOC(n,e))-VY(NOC(n,e)))
      &                                                     *FRACTIME
                   END DO
-               ELSE   
+!nld               ELSE   
 C . . . . . .USE THE STEADY STATE VELOCITIES                    
-                  DO n=1,3
-                     VVX(n)=VX(NOC(n,e))
-                     VVY(n)=VY(NOC(n,e))
-                  END DO
-               END IF    
+!                  DO n=1,3
+!                     VVX(n)=VX(NOC(n,e))
+!                     VVY(n)=VY(NOC(n,e))
+!                  END DO
+!nld               END IF    
 cc         WRITE(*,*)'IM AT LINE 359'
 C . . . .GET THE X-VELOCITY AT THE MIDPOINT
                CALL VELINTRP(X(NOC(1,e)),Y(NOC(1,e)),VVX(1),
@@ -630,7 +658,7 @@ C . . . .GET THE Y-VELOCITY AT THE MIDPOINT
      &                 X(NOC(3,e)),Y(NOC(3,e)),VVY(3),     
      &                         XP(p),YP(p),VYP)   
 
-                
+         write (*,*)'in RK2 midpoint vxp,vyp',VXP,VYP !nlddebug       
 C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT AND ORIGINAL POSITION
 C . .    DON'T DIFFUSE IF IN A DRY ELEMENT
                ! 
@@ -937,6 +965,7 @@ C----------------------------------------------------------------------
       keepDryParticles = .false.
       diffuseDryParticles = .false.
       metonly = .false.
+      steadyState = .false.
       !
       ! Get command line options
       argcount = command_argument_count() ! count up command line options
@@ -993,7 +1022,7 @@ C----------------------------------------------------------------------
                   i = i + 1
                   call getarg(i, cmdlinearg)
                   call echoCmdLineOpt(cmdlineopt,cmdlinearg)
-                  maureParameterInputFile = trim(cmdlinearg)                                    
+                  maureParameterInputFile = trim(cmdlinearg)           
                case default
                   write(6,'(a,a,a)') "WARNING: Command line option '",
      &             TRIM(cmdlineopt),"' was not recognized."
@@ -1027,12 +1056,14 @@ C . . NOW READ ALL THE INPUT DATA . . . . . . . . . . . . . . . . . . .
       CALL READ_DATA()
       WRITE(*,*)'ALL INITIAL INPUT DATA HAS BEEN READ SUCCESSFULLY'
 
+      ! Initial Read of the velocity data
       velEnd = .false.      
-      IF (DYN.EQ.1) THEN
+      CALL READ_VEL(velEnd)
+      IF (.not.steadyState) THEN
          WRITE(*,*)'VELOCITY SOLUTION WILL BE READ DYNAMICALLY'
          WRITE(*,*)'STARTING AT ',STDY_TIME
-         CALL READ_VEL(velEnd)
-         CALL READ_VEL(velEnd)
+         !nld CALL READ_VEL(velEnd) - moved above IF
+         !CALL READ_VEL(velEnd)  !nld thinks this doesn't need to be called twice anymore. 
          if (velEnd) then
             write(*,*) 'ERROR: Could not read velocity data.'
             stop
@@ -1044,7 +1075,7 @@ C        VELCNT=1
       ELSE
          WRITE(*,*)'STEADY-STATE SIMULATION, READING FORT.64 UNTIL ',
      &              STDY_TIME    
-         CALL READ_VEL(velEnd)
+         !nldCALL READ_VEL(velEnd) -moved above IF
          if (velEnd) then
             write(*,*) 'ERROR: Could not read velocity data.'
             stop
@@ -1055,7 +1086,7 @@ C        VELCNT=1
          WRITE(*,*)'VELOCITY SOLUTION AT ',STDY_TIME,
      &             ' WILL BE TAKEN AS STEADY-STATE SOLUTION'
       END IF
-
+      
 C-------------------INITIAL SEARCH FOR PARTICLES-----------------------      
 
 C . . SEARCH ALL ELEMENTS FOR INITIAL PARTICLE LOCATIONS. . . . . . . .
@@ -1106,18 +1137,22 @@ C----------------------------------------------------------------------
       
 C----------------------THIS IS THE TRACKING LOOP-----------------------
 C . . INITIALIZE SOME TIME KEEPING VARIABLES. . . . . . . . . . . . . .
-      TIME=STDY_TIME
       OUTTIME=STDY_TIME
-      VELTIME1=STDY_TIME
-      VELTIME2=VELTIME1+VTIMINC
-      FRACTIME=0.D0
+      VELTIME2=TIME
+      VELTIME1=VELTIME2-VTIMINC
+      FRACTIME=(STDY_TIME-VELTIME1)/VTIMINC
+      ! time was set to the time of the last read by read_vel_dataset
+      ! initial calls, now set it back to the start time incase
+      ! the start time was specified in between two current/wind output 
+      ! times
+      TIME=STDY_TIME  
 
       write(*,*) 'INFO: Starting particle tracking.'
 C . . TRACKING LOOP . . . . . . . . . . . . . . . . . . . . . . . . . .      
       DO s=1,NSTEPS
 c         WRITE(*,*)'TRACKING STEP ',J,' OF ',NSTEPS
 C . . . .WRITE OUTPUT ? . . . . . . . . . . . . . . . . . . . . . . . .                           
-         !write(*,*) "time=",time,"    outtime=",outtime !jgfdebug
+         write(*,*) "time=",time,"    outtime=",outtime !jgfdebug
          IF (TIME.EQ.OUTTIME) THEN
            CALL WRITE_DATA()
            OUTTIME=OUTTIME+OUTPER
@@ -1157,16 +1192,28 @@ C . . . .UPDATE SIMULATION TIME . . . . . . . . . . . . . . . . . . . .
          TIME=TIME+TS
          
 C . . . .CHECK TO SEE IF WE NEED TO GET NEW VELOCITY DATA         
-         IF (DYN.EQ.1) THEN
+         IF (.not.steadyState) THEN
             IF (TIME.GT.VELTIME2) THEN
+               ! READ_VEL will call read_vel_dataset, which will set TIME 
+               ! to the last read of the current/met file.
+               ! Remember what the time is now so we can reset later
+               NOW=TIME   
                CALL READ_VEL(velEnd)
                if (velEnd.eqv..true.) then
                   WRITE(*,*) 'INFO: Reached end of velocity file.'
                   stop
                else
-                  VELTIME1=VELTIME2
-                  VELTIME2=VELTIME1+VTIMINC
+                  ! these times correspond to fort.64 timing
+                  ! VELTIME2 is the time that was just read
+                  ! we can get it from the TIME variable just after read_vel() was called
+                  ! VELTIME1 is the previous time.
+                  VELTIME2=TIME      
+                  VELTIME1=VELTIME2-VTIMINC 
                endif
+               ! Since TIME got set to the last fort.64 time
+               ! we need to reset it to now, which should be one timestep after VELTIME1 
+               write(*,*)'TIMENOW: ', TIME, NOW !nlddebug
+               TIME=NOW
             END IF
             FRACTIME=(TIME-VELTIME1)/VTIMINC
          END IF        
