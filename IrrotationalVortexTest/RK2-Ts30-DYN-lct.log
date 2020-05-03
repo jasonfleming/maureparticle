@@ -1,0 +1,29 @@
+At line 281 of file Maureparticle.f (unit = 11, file = 'none')
+Fortran runtime error: End of file
+
+Error termination. Backtrace:
+#0  0x7ff3ef0e7d11 in ???
+#1  0x7ff3ef0e8859 in ???
+#2  0x7ff3ef0e953f in ???
+#3  0x7ff3ef32cc4b in ???
+#4  0x7ff3ef325e16 in ???
+#5  0x7ff3ef326db9 in ???
+#6  0x55827374c2a0 in __maureparams_MOD_initialize
+	at /home/jason/Campaigns/Development/maureparticle/Maureparticle.f:281
+#7  0x558273750218 in maureparticle
+	at /home/jason/Campaigns/Development/maureparticle/Maureparticle.f:1384
+#8  0x558273751da6 in main
+	at /home/jason/Campaigns/Development/maureparticle/Maureparticle.f:1244
+INFO: Processing --meshfile fort.14.
+INFO: Processing --maureparameterinputfile none.
+INFO: Processing --maureparticleinputfile initial-particle-locations.inp.
+INFO: Processing --elementlookuptablefile el2el.tbl.
+INFO: Processing --nodelookuptablefile node2el.tbl.
+INFO: Processing --slam0 -71.0.
+INFO: Processing --sfea0 40.0.
+INFO: Processing --initial-search-only true.
+INFO: Processing --initiallocationoutputfile RK2-Ts30-DYN.lct.
+ READING GRID DATA FROM: fort.14
+
+ NN =          441  NE =          800
+RK2-Ts30-DYN-lct failed

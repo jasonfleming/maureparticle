@@ -1,0 +1,26 @@
+INFO: Processing --meshfile fort.14.
+INFO: Processing --maureparameterinputfile none.
+INFO: Processing --maureparticleinputfile initial-particle-locations.inp.
+INFO: Processing --elementlookuptablefile el2el.tbl.
+INFO: Processing --nodelookuptablefile node2el.tbl.
+INFO: Processing --slam0 -71.0.
+INFO: Processing --sfea0 40.0.
+INFO: Processing --initial-search-only true.
+INFO: Processing --initiallocationoutputfile Euler-Ts30-Steady-5.lct.
+ READING GRID DATA FROM: fort.14
+
+ NN =          441  NE =          800
+
+ READING PARTICLE DATA FROM: initial-particle-locations.inp
+
+ reading data opened files
+INFO: Finished reading 5 particle locations.
+
+ EL2EL READ SUCCESSFULLY
+
+ NOD2EL READ SUCCESSFULLY
+
+ ALL INITIAL INPUT DATA HAS BEEN READ SUCCESSFULLY
+ SKIPPING READING FORT.64 BECAUSE A PARTICLE TRACKING PARAMETERS FILE WAS NOT PROVIDED
+ SEARCHING FOR PARTICLES . . .
+p1 p2 p3 p4 p5 Euler-Ts30-Steady-5-lct passed
