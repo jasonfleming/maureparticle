@@ -352,9 +352,7 @@ C . .    READ VELOCITY METADATA
             read(74,*,end=100) nvts,n,vtiminc ! number of datasets, number of nodes, time increment of output 
          endif
          do while (time.lt.stdy_time)
-         write(*,*)'b4 first call of READ_VEL time',time !nlddebug
             call read_vel_dataset(velEnd)
-         write(*,*)'after first call of READ_VEL time',time !nlddebug
          end do
          if (velEnd.eqv..false.) then
             WRITE(*,*) 'VELOCITY DATA READ SUCCESSFULLY'
@@ -366,9 +364,7 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
       !nld      vx(n)=vx2(n)
       !nld      vy(n)=vy2(n)      
       !nld   end do
-         write(*,*)'b4 later READ_VEL time',time !nlddebug
          call read_vel_dataset(velEnd)
-         write(*,*)'after later READ_VEL time',time !nlddebug
       end if
       return
       !--------------------------------------------------------------
@@ -464,7 +460,7 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
       DOUBLE PRECISION VVX(3),VVY(3)
       LOGICAL L_ISWET
 
-      write(*,*)'inEuler np=',np        !nlddebug
+      !write(*,*)'inEuler np=',np        !nlddebug
            
       DO p=1,NP
          IF (ITRKING(p).EQV..true.) THEN
@@ -496,11 +492,11 @@ C . . . . . . .GET THE Y-VELOCITY AT THE PARTICLE POSITION
      &                 X(NOC(2,e)),Y(NOC(2,e)),VVY(2),
      &                 X(NOC(3,e)),Y(NOC(3,e)),VVY(3),     
      &                         XP(p),YP(p),VYP)   
-         !write(*,*) p,vxp,vyp !jgfdebug
-         write(*,*) 'p,xp,yp',p,XP(p),YP(P) !nlddebug
-         write(*,*) 'Euler vxp,vyp',VXP,VYP !nlddebug
-         write(*,*) 'fractime, vyn1 vy2n1',fractime, VY(NOC(1,e)), 
-     &                       VY2(NOC(1,e))
+!         write(*,*) p,vxp,vyp !jgfdebug
+!         write(*,*) 'p,xp,yp',p,XP(p),YP(P) !nlddebug
+!         write(*,*) 'Euler vxp,vyp',VXP,VYP !nlddebug
+!         write(*,*) 'fractime, vyn1 vy2n1',fractime, VY(NOC(1,e)), 
+!     &                       VY2(NOC(1,e))
 C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT 
 C . .    AND ORIGINAL POSITION
 C . .    DON'T DIFFUSE IF IN A DRY ELEMENT
@@ -516,7 +512,7 @@ C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
                      L_ISWET=.FALSE.
                   END IF
                END DO
-          write(*,*)'L_ISWET',L_ISWET ! nlddebug
+          !write(*,*)'L_ISWET',L_ISWET ! nlddebug
                !
                ! @jasonfleming: don't mark them as lost if the associated 
                ! command line option was set
@@ -532,11 +528,11 @@ C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
                      R=R*(EDDY_DIF*TS)**0.5D0
                      XP(p)=XP(p)+VXP*TS + R * COS(ANG)
                      YP(p)=YP(p)+VYP*TS + R * SIN(ANG)
-           write(*,*)'Euler Diffusing, p,x,y',p,XP(p),YP(p) !nlddebug
+           !write(*,*)'Euler Diffusing, p,x,y',p,XP(p),YP(p) !nlddebug
                   ELSE
                      XP(p)=XP(p)+VXP*TS 
                      YP(p)=YP(p)+VYP*TS 
-           write(*,*)'Euler NOT Diffusing, p,x,y',p,XP(p),YP(p) !nlddebug
+           !write(*,*)'Euler NOT Diffusing, p,x,y',p,XP(p),YP(p) !nlddebug
                   END IF
                ENDIF
             END IF !LOST
@@ -572,11 +568,11 @@ C . . SAVE THE STARTING POSITIONS
          IF (LOST(p).EQV..false.) THEN
             XXP(p)=XP(p)
             YYP(p)=YP(p)
-      write(*,*)'saving starting posion, p,xp,yp',p,XP(p),YP(p) !nlddebug
+      !write(*,*)'saving starting posion, p,xp,yp',p,XP(p),YP(p) !nlddebug
          END IF
       END DO
       
-      WRITE(*,*)'STARTING POSITION SAVED'  !nlddebug
+!      WRITE(*,*)'STARTING POSITION SAVED'  !nlddebug
       
 C . . DO AN EULER STEP AS A FIRST GUESS
 C . . FOR THIS CALL DIFFUSIVITY IS SET TO ZERO
@@ -585,7 +581,7 @@ C . . FOR THIS CALL DIFFUSIVITY IS SET TO ZERO
       CALL EULER_STEP()
       eddy_dif = eddy_dif_temp
 
-      WRITE(*,*)'EULER GUESS COMPLETED' !nlddebug
+      !WRITE(*,*)'EULER GUESS COMPLETED' !nlddebug
      
 C . . relocate particle to the midpoint of the Euler path
       DO p=1,NP
@@ -599,9 +595,9 @@ CC      WRITE(*,*)'MIDPOINT CALCULATED'
 C----------------------------------------------------------------------      
 C . . CHECK LOCAT OF MIDPOINT
       DO p=1,NP 
-          WRITE(*,'(a,i0,a,l,a,l)') 
-     &              'particle ',p,' itrking ',
-     &              itrking(p),' lost ',lost(p) !jgfdebug
+!          WRITE(*,'(a,i0,a,l,a,l)') 
+!     &              'particle ',p,' itrking ',
+!     &              itrking(p),' lost ',lost(p) !jgfdebug
          IF (ITRKING(p).EQV..true.) THEN
             IF (LOST(p).EQV..false.) THEN    
                CALL LOCAT_CHK(p,locat(p))
@@ -609,9 +605,9 @@ C . . CHECK LOCAT OF MIDPOINT
                IF (FOUND(p).EQV..false.) THEN
                   eno=locat(p)
                   CALL UPDATE_LOCAT(p, locat(p))
-                  WRITE(*,'(a,i0,a,i0,a,i0)') 
-     &              'particle ',p,' updated element from ',
-     &              eno,' to ',locat(p) !jgfdebug
+!                  WRITE(*,'(a,i0,a,i0,a,i0)') 
+!     &              'particle ',p,' updated element from ',
+!     &              eno,' to ',locat(p) !jgfdebug
                   if (lost(p).eqv..true.) then
                      XP(p)=-99999.d0
                      YP(p)=-99999.d0
@@ -658,7 +654,7 @@ C . . . .GET THE Y-VELOCITY AT THE MIDPOINT
      &                 X(NOC(3,e)),Y(NOC(3,e)),VVY(3),     
      &                         XP(p),YP(p),VYP)   
 
-         write (*,*)'in RK2 midpoint vxp,vyp',VXP,VYP !nlddebug       
+         !write (*,*)'in RK2 midpoint vxp,vyp',VXP,VYP !nlddebug       
 C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT AND ORIGINAL POSITION
 C . .    DON'T DIFFUSE IF IN A DRY ELEMENT
                ! 
@@ -1152,7 +1148,7 @@ C . . TRACKING LOOP . . . . . . . . . . . . . . . . . . . . . . . . . .
       DO s=1,NSTEPS
 c         WRITE(*,*)'TRACKING STEP ',J,' OF ',NSTEPS
 C . . . .WRITE OUTPUT ? . . . . . . . . . . . . . . . . . . . . . . . .                           
-         write(*,*) "time=",time,"    outtime=",outtime !jgfdebug
+         !write(*,*) "time=",time,"    outtime=",outtime !jgfdebug
          IF (TIME.EQ.OUTTIME) THEN
            CALL WRITE_DATA()
            OUTTIME=OUTTIME+OUTPER
@@ -1212,7 +1208,7 @@ C . . . .CHECK TO SEE IF WE NEED TO GET NEW VELOCITY DATA
                endif
                ! Since TIME got set to the last fort.64 time
                ! we need to reset it to now, which should be one timestep after VELTIME1 
-               write(*,*)'TIMENOW: ', TIME, NOW !nlddebug
+               !write(*,*)'TIMENOW: ', TIME, NOW !nlddebug
                TIME=NOW
             END IF
             FRACTIME=(TIME-VELTIME1)/VTIMINC
