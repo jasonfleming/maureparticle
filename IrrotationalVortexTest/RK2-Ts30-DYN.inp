@@ -1,0 +1,19 @@
+DESCRIPTION LINE
+1                 ! NP - NUMBER OF PARTICLES
+30                ! TS - TIMESTEP IN SECONDS
+2010              ! RUNTIM - RUN TIME IN SECONDS
+30                ! OUTPER - PERIOD OF TIME FOR OUTPUT IN SECONDS 
+1                 ! RK2 - 0 FOR EULER'S METHOD, 1 FOR RK2 METHOD
+1                 ! DYN - 0 FOR STEADY-STATE, 1 FOR DYNAMIC
+5100              ! STDY_TIME - FORT.64 TIME FOR STEADY-STATE RUN OR STARTING TIME FOR DYNAMIC RUN(THIS MUST BE EXACTLY AN OUTPUT TIME IN THE FORT.64 FILE)
+0.0               ! EDDY_DIF - eddy diffusivity (L**2/T)
+0                 ! NWS - 0 if no extra wind Forcing
+0.0               ! WFACTOR - applies only of NWS.NE.0 
+1                 ! ICS - like ADCIRC, 2 for grid in lon,lat coords, 1 for Cartesian grid in meters
+-71. 40.          ! SLAM0,SFEA0 
+141.0   101.  1000  0   ! FOR I=1,NP;  XP(I),YP(I),LOCAT(I) - THESE ARE THE STARTING POSITION AND LOCAT FOR THE PARTICLES, 
+136.0   101.  1000  0   ! YOU CAN PUT MORE THAN NP PARTICLES IN THIS FILE BUT ONLY THE FIRST NP WILL BE TRACKED   
+146.0   101.  1000  0
+141.0   106.  1000  0
+141.0    96.  1000  0
+
