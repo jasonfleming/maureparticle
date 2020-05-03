@@ -694,11 +694,11 @@ C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
                      CALL RANDOM_NUMBER(ANG)
                      ANG=6.28318530717959D0*ANG
                      R=R*(EDDY_DIF*TS)**0.5D0
-                     XP(p)=XP(p)+VXP*TS + R * COS(ANG)
-                     YP(p)=YP(p)+VYP*TS + R * SIN(ANG)
+                     XP(p)=XXP(p)+VXP*TS + R * COS(ANG)
+                     YP(p)=YYP(p)+VYP*TS + R * SIN(ANG)
                   ELSE
-                     XP(p)=XP(p)+VXP*TS 
-                     YP(p)=YP(p)+VYP*TS 
+                     XP(p)=XXP(p)+VXP*TS 
+                     YP(p)=YYP(p)+VYP*TS 
                   END IF
                endif
             END IF
