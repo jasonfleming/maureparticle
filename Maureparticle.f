@@ -1,4 +1,3 @@
-
 C----------------------------------------------------------------------
 C
 C nld 2018 Aug 24 - lose_wetdry version:
@@ -54,7 +53,7 @@ C e.g.
 C       gfortran -o maurpt.exe Maureparticle.f
 C
 C       @jasonfleming:      
-C       gfortran -o maureparticle.x Maureparticle.f
+C       gfortran -O3 -ffixed-line-length-none -o maureparticle.x Maureparticle.f
 C       gfortran -g -O0 -Wall -ffixed-line-length-none -fbacktrace -fbounds-check -ffpe-trap=zero,invalid,underflow,overflow,denormal -o maureparticle.x Maureparticle.f
 C        
 C---------------------------------------------------------------------
@@ -78,9 +77,38 @@ C               elements. use BUILD_TABLES.f to create this file
 C
 C EL2EL.TBL - an element to element neighbor table created by
 C               BUILD_TABLES.f
-C
-C
-C
+C--------------------------------------------------------------------- 
+C New features implemented (@jasonfleming November/December 2020):
+C    + Added dry node flags at two time levels to record dry nodes 
+C      based on water current velocity in fort.64 file equal to -99999
+C      (missing val) as an alternative to using very low velocity as
+C      an indicator of a dry node
+C    + Enabled logging to a file rather than the screen
+C    + Enabled echoing input parameters to log 
+C    + Centralized i/o unit numbers in the module as integer parameters
+C    + Enabled the keeping of dry particles so that they could be
+C      re-entrained, rather than being marked permanently lost
+C    + Commented out the modification of the coordinates of lost particles
+C      to -99999 so their last predicted position could be recorded;
+C      however, the element number for lost particles will still be 
+C      set to -99999
+C    + Output number of particle datasets at the end for use in
+C      post processing workflows for ASCII data
+C  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+C Feature wish list : 
+C    + particle initial position file separate from parameter file
+C    + integration with asgs post processing modules (compile with 
+C      netcdf support)
+C    + netcdf4 output for particle positions
+C    + backward replay of velocity datasets (with negative velocities)
+C      to specify particle ending point(s) to get variety of particle 
+C      starting point(s)
+C    + netcdf4+xml output with interpolation of velocities and 
+C      water surface elevation
+C    + netcdf4+xml (xdmf) output
+C    + netcdf4 input for initial particle locations and release times
+C    + make a distinction between particle array index and 
+C      particle ID 
 C--------------------------------------------------------------------- 
 C Copyright (C) 2007, 2008, 2013-2016, 2020 Nathan Dill
 C Copyright (C) 2020 Jason Fleming
@@ -104,7 +132,6 @@ C you can contact the author at natedill(AT)gmail.com
 C
 C----------------------------------------------------------------------
       MODULE MAUREPARAMS
-
       !------------------------- VARIABLES ----------------------------      
       INTEGER :: NVTS   ! number of datasets in fort.64 (according to fort.64 header, which is not reliable)
       INTEGER :: RK2,NSTEPS
@@ -119,6 +146,7 @@ C----------------------------------------------------------------------
       REAL*8, ALLOCATABLE :: VX2(:),VY2(:) ! next velocity dataset
       REAL*8, ALLOCATABLE :: WX(:),WY(:) ! wind u and v velocity
       INTEGER, ALLOCATABLE :: NOD2EL(:,:) ! elements around each node
+      LOGICAL, ALLOCATABLE :: DN(:),DN2(:) ! dry node flags (true if dry) at time levels i and i+1      
 
       INTEGER :: NE ! number of elements in the mesh
       INTEGER, ALLOCATABLE :: NOC(:,:)    ! element table from mesh file?
@@ -132,14 +160,15 @@ C----------------------------------------------------------------------
       REAL*8, ALLOCATABLE :: RLSTIME(:)  ! release time for the particles 
       REAL*8, ALLOCATABLE :: XP(:),YP(:)   ! current particle positions/T
       DOUBLE PRECISION, ALLOCATABLE, SAVE :: XXP(:),YYP(:) ! rk2 starting particle position        
-      
+
       REAL*8 TS,RNTIM,OUTPER,TIME,OUTTIME,STDY_TIME,FRACTIME,NOW
       REAL*8 VTIMINC   ! time incr btw datasets in fort.64 file (according to the header in that file)
       REAL*8 RELEASEPER,VELTIME1,VELTIME2,EDDY_DIF,WFACTOR,SLAM0,SFEA0
       
-      CHARACTER*80 DESC1,DESC2
+      CHARACTER(len=2000) :: DESC1,DESC2
+    
+      integer :: particleDatasetCount = 0        ! counter to report the number of particle datasets written
 
-      logical :: metonly  ! .true. if particles should track wind instead of water current
       character(len=1024) :: maureParameterInputFile ! particle tracking control plus initial particle location
       character(len=1024) :: meshFile            ! adcirc fort.14
       character(len=1024) :: maureParticleOutputFile ! locations v time
@@ -147,10 +176,24 @@ C----------------------------------------------------------------------
       character(len=1024) :: windVelocityFile      
       character(len=1024) :: elementLookupTableFile
       character(len=1024) :: nodeLookupTableFile
+      character(len=1024) :: logFile
 
-      logical :: keepDryParticles
-      logical :: diffuseDryParticles 
-      logical :: steadyState
+      integer :: logUnit = 6  ! will be changed to 16 if the analyst redirects logging to a file
+      integer, parameter :: pInUnit = 10        ! initial particle locations
+      integer, parameter :: paramUnit = 11      ! particle tracking parameters
+      integer, parameter :: eleLookupUnit = 12  ! element neighbor lookup table generated by buildTables.pl
+      integer, parameter :: nodeLookupUnit = 13 ! node neighbor lookup table generated by buildTables.pl
+      integer, parameter :: meshUnit = 14       ! ascii mesh file
+      integer, parameter :: pOutUnit = 15       ! ascii particle output file
+      integer, parameter :: velUnit = 64        ! ascii water current velocity file
+      integer, parameter :: windUnit = 74       ! ascii wind velocity file 
+
+      logical :: keepDryParticles          ! don't mark particles in fully dry elements as permanently lost 
+      logical :: diffuseDryParticles       ! continue to apply brownian motion to particles in semi-dry elements
+      logical :: dryElementsWhenOneNodeIsDry ! true if an element should be considered completely dry if any node is dry 
+      logical :: steadyState  
+      logical :: velocityMissingValueIsDry ! enable use of u=-99999 or v=-99999 to indicate dry node
+      logical :: metonly  ! .true. if particles should track wind instead of water current
 
       contains     
       !________________________________________________________________
@@ -159,35 +202,59 @@ C----------------------------------------------------------------------
       implicit none
       integer :: p ! particle loop
 
+      ! if logging is not to stdout, then we need to open the file
+      if ( logUnit.ne.6 ) then
+         open(unit=logUnit,file=trim(adjustl(logFile)),action='write',
+     &           status='replace')
+      else 
+         ! i/o unit 6 is always open so there is nothing to do
+      endif
+
 C . . GET INFO TO ALLOCATE ARRAYS     
 
-      OPEN(UNIT=14,FILE=trim(meshFile))     
-      READ(14,'(A80)')DESC1
-      READ(14,*)NE,NN
-      CLOSE(14)
+      OPEN(UNIT=meshUnit,FILE=trim(meshFile))     
+      READ(meshUnit,*) DESC1
+      READ(meshUnit,*)NE,NN
+      CLOSE(meshUnit)
 
-      OPEN(UNIT=11,FILE=trim(maureParameterInputFile))      
-      READ(11,'(A80)')DESC2
-      READ(11,*)NP
-      READ(11,*)TS
-      READ(11,*)RNTIM
-      READ(11,*)OUTPER
-      READ(11,*)RK2
-      READ(11,*)DYN
-      READ(11,*)STDY_TIME
-      READ(11,*)EDDY_DIF
-      READ(11,*)NWS
-      READ(11,*)WFACTOR
-      READ(11,*)ICS
-      READ(11,*)SLAM0,SFEA0
-      WRITE(*,*)'NE,NN,NP',NE,NN,NP
+      OPEN(UNIT=paramUnit,FILE=trim(maureParameterInputFile))      
+      READ(paramUnit,*) DESC2
+      READ(paramUnit,*) NP
+      READ(paramUnit,*) TS
+      READ(paramUnit,*) RNTIM
+      READ(paramUnit,*) OUTPER
+      READ(paramUnit,*) RK2
+      READ(paramUnit,*) DYN
+      READ(paramUnit,*) STDY_TIME
+      READ(paramUnit,*) EDDY_DIF
+      READ(paramUnit,*) NWS
+      READ(paramUnit,*) WFACTOR
+      READ(paramUnit,*) ICS
+      READ(paramUnit,*) SLAM0,SFEA0
+      ! echo input parameters to log   
+      write(logUnit,*) 'ECHO: DESC1 ',trim(adjustl(DESC1))
+      write(logUnit,*) 'ECHO: DESC2 ',trim(adjustl(DESC2))
+      write(logUnit,*) 'ECHO: NP ',NP
+      write(logUnit,*) 'ECHO: TS ',TS
+      write(logUnit,*) 'ECHO: RNTIM ',RNTIM
+      write(logUnit,*) 'ECHO: OUTPER ',OUTPER
+      write(logUnit,*) 'ECHO: RK2 ',RK2
+      write(logUnit,*) 'ECHO: DYN ',DYN
+      write(logUnit,*) 'ECHO: STDY_TIME ',STDY_TIME
+      write(logUnit,*) 'ECHO: EDDY_DIF ',EDDY_DIF 
+      write(logUnit,*) 'ECHO: NWS ',NWS              
+      write(logUnit,*) 'ECHO: WFACTOR ',WFACTOR
+      write(logUnit,*) 'ECHO: ICS ',ICS
+      write(logUnit,*) 'ECHO: SLAM0,SFEA0 ',SLAM0,SFEA0
+
+      write(logUnit,*) 'NE,NN,NP',NE,NN,NP
                       
-      CLOSE(11)
+      CLOSE(paramUnit)
       !
       ! check input: emit an error message if the output interval is
       ! cannot be divided evenly by timestep
       if ( modulo(outper,ts).ne.0 ) then
-         write(*,*) "ERROR: The output interval ",outper,
+         write(logUnit,*) "ERROR: The output interval ",outper,
      &   " cannot be divided evenly by the timestep ",ts,".",
      &   " As a result, output would never be written.",
      &   " Please adjust either the timestep or output interval."
@@ -196,7 +263,7 @@ C . . GET INFO TO ALLOCATE ARRAYS
       !
       ! check input: if --metonly was specified, then nws must be nonzero
       if ((metonly.eqv..true.).and.(nws.eq.0)) then
-         write(*,*) "ERROR: The --metonly option was specified ",
+         write(logUnit,*) "ERROR: The --metonly option was specified ",
      &   " on the command line but the meteorological data parameter ",
      &   " NWS was set to zero. Please remove the --metonly option ",
      &   " from the command line or make the NWS parameter nonzero."
@@ -215,11 +282,12 @@ C . . FIGURE TOTAL NUMBER OF PARTICLES FOR CONTINUOUS RELEASE . . . . .
 C                 AND ALLOCATE ARRAYS ACCORDINGLY                       
       ALLOCATE(NOC(3,NE),NOD2EL(12,NN),EL2EL(3,NE),LOCAT(NP),FOUND(NP))
       ALLOCATE( X(NN),Y(NN),VX(NN),VY(NN),VX2(NN),VY2(NN),
-     &      ITRKING(NP),RLSTIME(NP),LOST(NP),XP(NP),YP(NP))    
+     &      ITRKING(NP),RLSTIME(NP),LOST(NP),XP(NP),YP(NP))
       ALLOCATE(XXP(NP),YYP(NP))
       if (nws.ne.0) then
          allocate(wx(nn),wy(nn))
       endif
+      allocate(dn(nn),dn2(nn)) ! dry node flag (true if dry) for all nodes ; at time levels 1 and 2
  
 C . . INITIALIZE VECTORS. . . . . . . . . . . . . . . . . . . . . .   
       DO p=1,NP
@@ -231,7 +299,7 @@ C . . INITIALIZE VECTORS. . . . . . . . . . . . . . . . . . . . . .
          VY(p)=0.d0
       END DO
 
-      wfactor = 0.d0
+
       !----------------------------------------------------------------
       end subroutine initialize
       !================================================================
@@ -246,21 +314,22 @@ C . . INITIALIZE VECTORS. . . . . . . . . . . . . . . . . . . . . .
       integer :: p  ! particle loop
       integer :: e  ! element loop
       integer :: n  ! mesh node loop 
+
       
-      OPEN(UNIT=11,FILE=trim(maureParameterInputFile))
-      OPEN(UNIT=12,FILE=trim(elementLookupTableFile))
-      OPEN(UNIT=13,FILE=trim(nodeLookupTableFile))
-      OPEN(UNIT=14,FILE=trim(meshFile))
-      write(*,*)'reading data opened files'
+      OPEN(UNIT=paramUnit,FILE=trim(maureParameterInputFile))
+      OPEN(UNIT=eleLookupUnit,FILE=trim(elementLookupTableFile))
+      OPEN(UNIT=nodeLookupUnit,FILE=trim(nodeLookupTableFile))
+      OPEN(UNIT=meshUnit,FILE=trim(meshFile))
+      write(logUnit,*)'reading data opened files'
       
       DO l=1,13
-         READ(11,*) ! skip over control parameters in PARTICLES.INP
+         READ(paramUnit,*) ! skip over control parameters in PARTICLES.INP
       END DO
       
 C . . READ PARTICLE STARTING POSITIONS      
       DO p=1,NP
-c         READ(11,*)XP(I),YP(I),RLSTIME(I),LOCAT(I)
-         READ(11,*)SLAM,SFEA,RLSTIME(p),LOCAT(p)
+c         READ(paramUnit,*)XP(I),YP(I),RLSTIME(I),LOCAT(I)
+         READ(paramUnit,*)SLAM,SFEA,RLSTIME(p),LOCAT(p)
          ! convert lon lat to cpp coordinate system (meters)
          IF (ICS.EQ.2) THEN
             CALL CPPD(XP(p),YP(p),SLAM,SFEA,SLAM0,SFEA0)
@@ -268,30 +337,30 @@ c         READ(11,*)XP(I),YP(I),RLSTIME(I),LOCAT(I)
             XP(p)=SLAM
             YP(p)=SFEA
          END IF
-c         WRITE(*,100)'PARTICLE ',I,' WILL BEGIN AT ',XP(I),',',YP(I)
+c         write(logUnit,100)'PARTICLE ',I,' WILL BEGIN AT ',XP(I),',',YP(I)
       END DO
 ! 100  FORMAT(1X,A,I8,A,F16.6,A,F16.6)     
 C . . READ NEIGHBOR TABLES
       DO e=1,NE
-         READ(12,*) (EL2EL(n,e),n=1,3)
+         READ(eleLookupUnit,*) (EL2EL(n,e),n=1,3)
       END DO
-      WRITE(*,*)
-      WRITE(*,*)'EL2EL READ SUCCESSFULLY'
-      WRITE(*,*)
+      write(logUnit,*)
+      write(logUnit,*)'EL2EL READ SUCCESSFULLY'
+      write(logUnit,*)
       
       DO n=1,NN
-         READ(13,*) (NOD2EL(e,n),e=1,12)
+         READ(nodeLookupUnit,*) (NOD2EL(e,n),e=1,12)
       END DO
-      WRITE(*,*)'NOD2EL READ SUCCESSFULLY'
-      WRITE(*,*)
+      write(logUnit,*)'NOD2EL READ SUCCESSFULLY'
+      write(logUnit,*)
       
 C . . READ GRID INFORMATION
-      READ(14,*) ! skip comment line
-      READ(14,*) ! skip ne and nn line
+      READ(meshUnit,*) ! skip comment line
+      READ(meshUnit,*) ! skip ne and nn line
       ! read node table
       DO n=1,NN      
-c         READ(14,*)K,X(I),Y(I),Z
-         READ(14,*) l,SLAM,SFEA,Z  
+c         READ(meshUnit,*)K,X(I),Y(I),Z
+         READ(meshUnit,*) l,SLAM,SFEA,Z  
          IF (ICS.EQ.2) THEN
             CALL CPPD(X(n),Y(n),SLAM,SFEA,SLAM0,SFEA0)
          ELSE
@@ -301,14 +370,14 @@ c         READ(14,*)K,X(I),Y(I),Z
       END DO
       !@jasonfleming TODO: this should not be a requirement? 
       IF (l.NE.NN) THEN
-         WRITE(*,*)'!!!! ERROR- NODE NUMBERS ARE NOT CONSECUTIVE !!!!'
-         WRITE(*,*)'!!!!           STOPPING EXECUTION             !!!!'
+         write(logUnit,*) '!!!! ERROR- NODE NUMBERS ARE NOT CONSECUTIVE !!!!'
+         write(logUnit,*) '!!!!           STOPPING EXECUTION             !!!!'
          STOP
       END IF
       !
-      ! read element table
+      ! read element table from mesh file
       DO e=1,NE
-         READ(14,*) l,p,(NOC(n,e),n=1,3)
+         READ(meshUnit,*) l,p,(NOC(n,e),n=1,3)
       END DO
       !----------------------------------------------------------------
       END SUBROUTINE READ_DATA
@@ -334,36 +403,31 @@ c         READ(14,*)K,X(I),Y(I),Z
       velEnd = .false. 
 
       if (first.eqv..true.) then          
-         !write(*,*) 'first' !jgfdebug
+         !write(logUnit,*) 'first' !jgfdebug
          first = .false.
          ndset=1
-         TIME=-90.D0  !nld - guessing this dont matter as long as TIME .lt. STDY_IIME
+         TIME=-90.D0  !nld - guessing this does not matter as long as TIME .lt. STDY_IIME
 C . .    READ VELOCITY METADATA
          if (metonly.eqv..false.) then
-            !write(*,*) 'metonly false' !jgfdebug         
-            OPEN(UNIT=64,FILE=trim(velocityFile))
-            READ(64,*,END=100) line ! skip comment line
-            !write(*,*) trim(line) !jgfdebug
-            READ(64,*,END=100) NVTS,n,VTIMINC ! number of datasets, number of nodes, time increment of output 
+            !write(logUnit,*) 'metonly false' !jgfdebug         
+            OPEN(UNIT=velUnit,FILE=trim(velocityFile))
+            READ(velUnit,*,END=100) line ! skip comment line
+            !write(logUnit,*) trim(line) !jgfdebug
+            READ(velUnit,*,END=100) NVTS,n,VTIMINC ! number of datasets, number of nodes, time increment of output 
          endif
          if (nws.ne.0) then
-            open(unit=74,file=trim(windvelocityfile))
-            read(74,*,end=100) ! skip comment
-            read(74,*,end=100) nvts,n,vtiminc ! number of datasets, number of nodes, time increment of output 
+            open(unit=windUnit,file=trim(windvelocityfile))
+            read(windUnit,*,end=100) ! skip comment
+            read(windUnit,*,end=100) nvts,n,vtiminc ! number of datasets, number of nodes, time increment of output 
          endif
          do while (time.lt.stdy_time)
             call read_vel_dataset(velEnd)
          end do
          if (velEnd.eqv..false.) then
-            WRITE(*,*) 'VELOCITY DATA READ SUCCESSFULLY'
+            write(logUnit,*) 'VELOCITY DATA READ SUCCESSFULLY'
          endif
 C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES      
       else
-      ! VX,VY will get advanced within the call to read_vel_dataset
-      !nld   do n=1,nn
-      !nld      vx(n)=vx2(n)
-      !nld      vy(n)=vy2(n)      
-      !nld   end do
          call read_vel_dataset(velEnd)
       end if
       return
@@ -371,9 +435,9 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
       ! jump to here when attempting to read past the end of the file      
  100  CONTINUE
       velEnd = .true.
-      write(*,*) 'ERROR: Velocity file ended unexpectedly.'
-      CLOSE(64)
-      IF (NWS.NE.0) CLOSE(74)
+      write(logUnit,*) 'ERROR: Velocity file ended unexpectedly.'
+      CLOSE(velUnit)
+      IF (NWS.NE.0) CLOSE(windUnit)
       RETURN      
       !================================================================
       END SUBROUTINE READ_VEL
@@ -393,20 +457,41 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
       ! advance VX,VY
       VX(:)=VX2(:)
       VY(:)=VY2(:)
+      ! advance dry node flag
+      dn(:)=dn2(:)
       if (metonly.eqv..false.) then 
             !READ(64,*,END=100) line ! skip comment line
-            !write(*,*) trim(line) !jgfdebug
-         read(64,*,end=100) time    
+            !write(logUnit,*) trim(line) !jgfdebug
+         read(velUnit,*,end=100) time    
       endif
       if (nws.ne.0) then
-         read(74,*,end=100) time
-      endif         
+         read(windUnit,*,end=100) time
+      endif
+      dn2(:) = .false. ! set dry node flag to false (i.e., initialize all nodes in the dataset to wet)         
       do n=1,nn
          if (metonly.eqv..false.) then
-            read(64,*) l,vx2(n),vy2(n)
+            read(velUnit,*) l,vx2(n),vy2(n)
+            ! @jasonfleming: allow analyst to use missing velocity 
+            ! values (-99999.0) to indicate dry nodes instead of using
+            ! very small (basically zero) velocities.
+            if ( velocityMissingValueIsDry.eqv..true. ) then
+               if ((vx2(n).lt.-99990.d0).or.(vy2(n).lt.-99990.d0)) then
+                  dn2(n) = .true.
+                  ! reset the velocities to zero so they can be used directly for spatial and temporal interpolation of velocity
+                  vx2(n) = 0.d0
+                  vy2(n) = 0.d0
+               endif
+            else 
+               ! if there are no missing values in the velocity data
+               ! then nodes with zero velocities are dry
+               if ((abs(vx2(n)).le.epsilon(vx2(n))).and.
+     &             (abs(vy2(n)).le.epsilon(vy2(n)))) then
+                  dn2(n) = .true.
+               end if
+            endif             
          endif
          if (nws.ne.0) then         
-            read(74,*) l,wx(n),wy(n)
+            read(windUnit,*) l,wx(n),wy(n)
          endif
       end do
       ! set the particle-driving velocity according to the current,
@@ -422,16 +507,16 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
             vy2(:)=vy2(:)+wfactor*wy(:)
          endif
       endif
-      write(6,fmt='(a,f9.1,a)',advance='no')'time[',TIME,']'            
-      write(6,fmt='(a,i0,a)',advance='no') '[',ndset,'] '
+      write(logUnit,fmt='(a,f9.1,a)',advance='no')'time[',TIME,']'            
+      write(logUnit,fmt='(a,i0,a)',advance='no') '[',ndset,'] '
       ndset=ndset+1  ! jgf: Increment the dataset counter
       RETURN
       !--------------------------------------------------------------
       ! jump to here when attempting to read past the end of the file      
  100  CONTINUE
       velEnd = .true.
-      CLOSE(64)
-      IF (NWS.NE.0) CLOSE(74)
+      CLOSE(velUnit)
+      IF (NWS.NE.0) CLOSE(windUnit)
       RETURN
       !================================================================
       END SUBROUTINE READ_VEL_DATASET
@@ -460,7 +545,7 @@ C . . EXCEPT FOR FIRST TIME REPLACE OLD VELOCITIES WITH NEW ONES
       DOUBLE PRECISION VVX(3),VVY(3)
       LOGICAL L_ISWET
 
-      !write(*,*)'inEuler np=',np        !nlddebug
+      !write(logUnit,*)'inEuler np=',np        !nlddebug
            
       DO p=1,NP
          IF (ITRKING(p).EQV..true.) THEN
@@ -492,10 +577,10 @@ C . . . . . . .GET THE Y-VELOCITY AT THE PARTICLE POSITION
      &                 X(NOC(2,e)),Y(NOC(2,e)),VVY(2),
      &                 X(NOC(3,e)),Y(NOC(3,e)),VVY(3),     
      &                         XP(p),YP(p),VYP)   
-!         write(*,*) p,vxp,vyp !jgfdebug
-!         write(*,*) 'p,xp,yp',p,XP(p),YP(P) !nlddebug
-!         write(*,*) 'Euler vxp,vyp',VXP,VYP !nlddebug
-!         write(*,*) 'fractime, vyn1 vy2n1',fractime, VY(NOC(1,e)), 
+!         write(logUnit,*) p,vxp,vyp !jgfdebug
+!         write(logUnit,*) 'p,xp,yp',p,XP(p),YP(P) !nlddebug
+!         write(logUnit,*) 'Euler vxp,vyp',VXP,VYP !nlddebug
+!         write(logUnit,*) 'fractime, vyn1 vy2n1',fractime, VY(NOC(1,e)), 
 !     &                       VY2(NOC(1,e))
 C . .    CALCULATE NEW POSITIONS USING VELOCITY AT MIDPOINT 
 C . .    AND ORIGINAL POSITION
@@ -505,14 +590,20 @@ C . .    ON THE VELOCITY OF ANY WET NODES IN THE ELEMENT, WHICH SHOULD
 C . .    HELP PARTICLES FROM GETTING STUCK ON A WET/DRY BOUNDARY
 C . .    ASSUME WE'RE IN A DRY ELEMENT IF ANY OF THE NODES HAVE VELOCITY LESS 
 C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
+C        (or have missing velocity values)
                L_ISWET=.TRUE.
-               DO n=1,3
-                  IF ((ABS(VVX(n)).LE.EPSILON(VVX(n))).AND.
-     &                  (ABS(VVY(n)).LE.EPSILON(VVY(n)))) THEN
+               if ( dryElementsWhenOneNodeIsDry.eqv..true.) then
+                  ! element is considered dry if any node is dry
+                  if ( any(dn(noc(:,e))).eqv..true. ) then
                      L_ISWET=.FALSE.
-                  END IF
-               END DO
-          !write(*,*)'L_ISWET',L_ISWET ! nlddebug
+                  endif
+               else
+                  ! element is considered dry only if all 3 nodes are dry
+                  if (all(dn(noc(:,e))).eqv..true.) then
+                     L_ISWET=.FALSE.
+                  endif
+               endif
+          !write(logUnit,*)'L_ISWET',L_ISWET ! nlddebug
                !
                ! @jasonfleming: don't mark them as lost if the associated 
                ! command line option was set
@@ -528,11 +619,11 @@ C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
                      R=R*(EDDY_DIF*TS)**0.5D0
                      XP(p)=XP(p)+VXP*TS + R * COS(ANG)
                      YP(p)=YP(p)+VYP*TS + R * SIN(ANG)
-           !write(*,*)'Euler Diffusing, p,x,y',p,XP(p),YP(p) !nlddebug
+           !write(logUnit,*)'Euler Diffusing, p,x,y',p,XP(p),YP(p) !nlddebug
                   ELSE
                      XP(p)=XP(p)+VXP*TS 
                      YP(p)=YP(p)+VYP*TS 
-           !write(*,*)'Euler NOT Diffusing, p,x,y',p,XP(p),YP(p) !nlddebug
+           !write(logUnit,*)'Euler NOT Diffusing, p,x,y',p,XP(p),YP(p) !nlddebug
                   END IF
                ENDIF
             END IF !LOST
@@ -568,11 +659,11 @@ C . . SAVE THE STARTING POSITIONS
          IF (LOST(p).EQV..false.) THEN
             XXP(p)=XP(p)
             YYP(p)=YP(p)
-      !write(*,*)'saving starting posion, p,xp,yp',p,XP(p),YP(p) !nlddebug
+      !write(logUnit,*)'saving starting posion, p,xp,yp',p,XP(p),YP(p) !nlddebug
          END IF
       END DO
       
-!      WRITE(*,*)'STARTING POSITION SAVED'  !nlddebug
+!      write(logUnit,*)'STARTING POSITION SAVED'  !nlddebug
       
 C . . DO AN EULER STEP AS A FIRST GUESS
 C . . FOR THIS CALL DIFFUSIVITY IS SET TO ZERO
@@ -581,7 +672,7 @@ C . . FOR THIS CALL DIFFUSIVITY IS SET TO ZERO
       CALL EULER_STEP()
       eddy_dif = eddy_dif_temp
 
-      !WRITE(*,*)'EULER GUESS COMPLETED' !nlddebug
+      !write(logUnit,*)'EULER GUESS COMPLETED' !nlddebug
      
 C . . relocate particle to the midpoint of the Euler path
       DO p=1,NP
@@ -591,30 +682,31 @@ C . . relocate particle to the midpoint of the Euler path
          END IF
       END DO
       
-CC      WRITE(*,*)'MIDPOINT CALCULATED'
+CC      write(logUnit,*)'MIDPOINT CALCULATED'
 C----------------------------------------------------------------------      
 C . . CHECK LOCAT OF MIDPOINT
       DO p=1,NP 
-!          WRITE(*,'(a,i0,a,l,a,l)') 
+!          write(logUnit,'(a,i0,a,l,a,l)') 
 !     &              'particle ',p,' itrking ',
 !     &              itrking(p),' lost ',lost(p) !jgfdebug
          IF (ITRKING(p).EQV..true.) THEN
             IF (LOST(p).EQV..false.) THEN    
                CALL LOCAT_CHK(p,locat(p))
-               !WRITE(*,*)'MIDPOINT CHECKED, PARTICLE ',p
+               !write(logUnit,*)'MIDPOINT CHECKED, PARTICLE ',p
                IF (FOUND(p).EQV..false.) THEN
                   eno=locat(p)
                   CALL UPDATE_LOCAT(p, locat(p))
-!                  WRITE(*,'(a,i0,a,i0,a,i0)') 
+!                  write(logUnit,'(a,i0,a,i0,a,i0)') 
 !     &              'particle ',p,' updated element from ',
 !     &              eno,' to ',locat(p) !jgfdebug
                   if (lost(p).eqv..true.) then
-                     XP(p)=-99999.d0
-                     YP(p)=-99999.d0
-                     locat(p)=0
+                     ! XP(p)=-99999.d0
+                     ! YP(p)=-99999.d0
+                     ! locat(p)=0
+                     locat(p)=-99999                     
                   endif
                ELSE
-                 ! WRITE(*,*)'ELEMENT UNCHANGED, PARTICLE ',p !jgfdebug            
+                 ! write(logUnit,*)'ELEMENT UNCHANGED, PARTICLE ',p !jgfdebug            
                END IF
             END IF
          END IF
@@ -641,7 +733,7 @@ C . . . . . .USE THE STEADY STATE VELOCITIES
 !                     VVY(n)=VY(NOC(n,e))
 !                  END DO
 !nld               END IF    
-cc         WRITE(*,*)'IM AT LINE 359'
+cc         write(logUnit,*)'IM AT LINE 359'
 C . . . .GET THE X-VELOCITY AT THE MIDPOINT
                CALL VELINTRP(X(NOC(1,e)),Y(NOC(1,e)),VVX(1),
      &                 X(NOC(2,e)),Y(NOC(2,e)),VVX(2),
@@ -669,14 +761,19 @@ C . .    ASSUME WE'RE IN A DRY ELEMENT IF ANY OF THE NODES HAVE VELOCITY LESS
 C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
                ! 
                ! @jasonfleming: alternatively we could load the fort.63 to see if 
-               ! any of the 3 nodes are dry rather than look at velocity
+               ! all of the 3 nodes are dry rather than look at velocity
                L_ISWET=.TRUE.
-               DO n=1,3
-                  IF ((ABS(VVX(n)).LE.EPSILON(VVX(n))).AND.
-     &          (ABS(VVY(n)).LE.EPSILON(VVY(n)))) THEN
+               if ( dryElementsWhenOneNodeIsDry.eqv..true.) then
+                  ! element is considered dry if any node is dry
+                  if ( any(dn(noc(:,e))).eqv..true. ) then
                      L_ISWET=.FALSE.
-                  END IF
-               END DO
+                  endif
+               else
+                  ! element is considered dry only if all 3 nodes are dry
+                  if (all(dn(noc(:,e))).eqv..true.) then
+                     L_ISWET=.FALSE.
+                  endif
+               ENDIF  
                !
                ! @jasonfleming: don't mark them as lost if the associated 
                ! command line option was set
@@ -718,7 +815,9 @@ C . .    THAN THE MACHINE PRECISION (FROM EPSILON FUNCTION)
       DOUBLE PRECISION DS1(2),DS2(2),DS3(2),CROSS,C1,C2,C3
       
       FOUND(p) = .false.
-      IF (e.EQ.0) THEN
+      ! zero or -99999 indicates the particle is lost or in a fully dry element
+      ! and should not be tracked
+      IF (e.LE.0) THEN
          RETURN 
       ENDIF
              
@@ -832,20 +931,22 @@ C . . STILL NOT FOUND,. . . . . . . . . . . . . . . . . . . . . . . . .
       ! @jasonfleming: try just searching every element like we did 
       ! in the initial particle search ... if we don't find it that
       ! way, then mark it as permanently lost
-      write(*,*) 'searching for particle ',p !jgfdebug
+      !write(logUnit,*) 'searching for particle ',p !jgfdebug
       do e=1,ne
          call locat_chk(p,e) ! particle, element 
          if (found(p).eqv..true.) then
             locat(p)=e
-            write(*,*) 'particle ',p,' was found in element ',e !jgfdebug
+            !write(logUnit,*) 'particle ',p,' was found in element ',e !jgfdebug
             exit
          end if
       end do
       if (found(p).eqv..false.) then
-         write(*,*) 'particle ',p,' cannot be found' !jgfdebug
+         write(logUnit,*) 'particle ',p,' cannot be found' !jgfdebug
          locat(p)=0
-         xp(p)=-99999.d0
-         yp(p)=-99999.d0
+         ! @jasonfleming commented this out to keep the last predicted
+         ! particle position for lost particles 
+         ! xp(p)=-99999.d0
+         ! yp(p)=-99999.d0
          lost(p)=.true.         
       endif
 
@@ -895,20 +996,20 @@ C      END DO
       !----------------------------------------------------------------
       IMPLICIT NONE    
       logical, save :: first = .true. 
-      integer :: p   ! particle loop
+      integer :: p   ! particle loop counter
       integer :: lct ! element where the particle is found (if any)
       real*8 slam, sfea 
       !
       ! upon first call, create a new particle output file
       if (first) then
-         OPEN(UNIT=15,FILE=trim(maureParticleOutputFile),action='write',
-     &           status='replace')
+         OPEN(UNIT=pOutUnit,FILE=trim(maureParticleOutputFile),
+     &           action='write',status='replace')
          first = .false.
       else
          ! after the first call, just append to the end of the existing 
          ! output file
-         OPEN(UNIT=15,FILE=trim(maureParticleOutputFile),action='write',
-     &           status='old',position='append')      
+         OPEN(UNIT=pOutUnit,FILE=trim(maureParticleOutputFile),
+     &           action='write',status='old',position='append')      
       endif
       
       DO p=1,NP
@@ -916,12 +1017,13 @@ C      END DO
          IF (LOST(p).eqv..true.) LCT=0    
          IF (ICS.EQ.2) THEN
             CALL INVCPD(XP(p),YP(p),SLAM,SFEA,SLAM0,SFEA0)
-            WRITE(15,101) p,SLAM,SFEA,TIME,LCT
+            WRITE(pOutUnit,101) p,SLAM,SFEA,TIME,LCT
          ELSE    
-            WRITE(15,*) p,XP(p),YP(p),TIME,LCT
+            WRITE(pOutUnit,*) p,XP(p),YP(p),TIME,LCT
          END IF
       END DO
-      close(15)
+      close(pOutUnit)
+      particleDatasetCount = particleDatasetCount + 1
 ! 100  format(I12,2f14.2,f14.2,I12)   
  101  format(I12,2f14.9,f14.2,I12)   
       RETURN
@@ -950,7 +1052,7 @@ C---------------------------- VARIABLES -------------------------------
       logical :: velEnd ! true when all velocity data has been read
 C----------------------------------------------------------------------      
       ! set default file names and anything else that can be overridden by cmd 
-      ! line arguments
+      ! line arguments or in the input parameters file
       meshFile = 'FORT.14'
       maureParameterInputFile = 'PARTICLES.INP'
       maureParticleOutputFile = 'MAUREPT.OUT'      
@@ -958,10 +1060,15 @@ C----------------------------------------------------------------------
       nodeLookupTableFile = 'NODE2EL.TBL'
       velocityFile = 'FORT.64'
       windVelocityFile = 'FORT.74'
+      wfactor = 0.d0           
+      logFile = 'stdout'
+      logUnit = 6
       keepDryParticles = .false.
       diffuseDryParticles = .false.
+      dryElementsWhenOneNodeIsDry = .false.
       metonly = .false.
       steadyState = .false.
+      velocityMissingValueIsDry = .false.      
       !
       ! Get command line options
       argcount = command_argument_count() ! count up command line options
@@ -972,10 +1079,24 @@ C----------------------------------------------------------------------
             call getarg(i, cmdlineopt)
             call downcase(cmdlineopt)
             select case(trim(Cmdlineopt))
+               case("--logfile")
+                  i = i + 1
+                  call getarg(i, cmdlinearg)
+                  logFile = trim(cmdlinearg)
+                  call echoCmdLineOpt(cmdlineopt,cmdlinearg)
+                  logUnit = 16               
                case("--keep-dry-particles")
                   keepDryParticles = .true.
                   cmdlinearg = "true"
                   call echoCmdLineOpt(cmdlineopt,cmdlinearg)
+               case("--dry-elements-when-one-node-is-dry")
+                  dryElementsWhenOneNodeIsDry = .true.
+                  cmdlinearg = "true"
+                  call echoCmdLineOpt(cmdlineopt,cmdlinearg)                  
+               case("--velocity-missing-value-is-dry")
+                  velocityMissingValueIsDry = .true.
+                  cmdlinearg = "true"
+                  call echoCmdLineOpt(cmdlineopt,cmdlinearg)                  
                case("--diffuse-dry-particles")
                   diffuseDryParticles = .true.
                   cmdlinearg = "true"
@@ -1020,7 +1141,7 @@ C----------------------------------------------------------------------
                   call echoCmdLineOpt(cmdlineopt,cmdlinearg)
                   maureParameterInputFile = trim(cmdlinearg)           
                case default
-                  write(6,'(a,a,a)') "WARNING: Command line option '",
+                  write(logUnit,'(a,a,a)') "WARNING: Command line option '",
      &             TRIM(cmdlineopt),"' was not recognized."
             end select
          end do
@@ -1033,53 +1154,48 @@ C----------------------------------------------------------------------
 c----------------------------------------------------------------------
      
 C . . NOW READ ALL THE INPUT DATA . . . . . . . . . . . . . . . . . . .
-      WRITE(*,*)'READING GRID DATA FROM: ',TRIM(DESC1)
-      WRITE(*,*)
-      WRITE(*,*)'NN = ',NN,' NE = ',NE
-      WRITE(*,*)
-      WRITE(*,*)'READING PARTICLE DATA FROM: ',TRIM(DESC2)
-      WRITE(*,*)
-      WRITE(*,*)'NP = ',NP,' TS = ',TS
-      WRITE(*,*)
+      write(logUnit,*)'READING GRID DATA FROM: ',TRIM(DESC1)
+      write(logUnit,*)
+      write(logUnit,*)'NN = ',NN,' NE = ',NE
+      write(logUnit,*)
+      write(logUnit,*)'READING PARTICLE DATA FROM: ',TRIM(DESC2)
+      write(logUnit,*)
+      write(logUnit,*)'NP = ',NP,' TS = ',TS
+      write(logUnit,*)
       IF (RK2.EQ.1) THEN
-       WRITE(*,*)'VELOCITY INTEGRATION BY 2ND ORDER RUNGE-KUTTA METHOD' 
-         WRITE(*,*)
+       write(logUnit,*)'VELOCITY INTEGRATION BY 2ND ORDER RUNGE-KUTTA METHOD' 
+         write(logUnit,*)
       ELSE
-         WRITE(*,*)"VELOCITY INTEGRATION BY EULER'S METHOD"
-         WRITE(*,*)
+         write(logUnit,*)"VELOCITY INTEGRATION BY EULER'S METHOD"
+         write(logUnit,*)
       END IF
 
       CALL READ_DATA()
-      WRITE(*,*)'ALL INITIAL INPUT DATA HAS BEEN READ SUCCESSFULLY'
+      write(logUnit,*)'ALL INITIAL INPUT DATA HAS BEEN READ SUCCESSFULLY'
 
       ! Initial Read of the velocity data
       velEnd = .false.      
       CALL READ_VEL(velEnd)
       IF (.not.steadyState) THEN
-         WRITE(*,*)'VELOCITY SOLUTION WILL BE READ DYNAMICALLY'
-         WRITE(*,*)'STARTING AT ',STDY_TIME
-         !nld CALL READ_VEL(velEnd) - moved above IF
-         !CALL READ_VEL(velEnd)  !nld thinks this doesn't need to be called twice anymore. 
+         write(logUnit,*)'VELOCITY SOLUTION WILL BE READ DYNAMICALLY'
+         write(logUnit,*)'STARTING AT ',STDY_TIME
          if (velEnd) then
-            write(*,*) 'ERROR: Could not read velocity data.'
+            write(logUnit,*) 'ERROR: Could not read velocity data.'
             stop
          else
-            WRITE(*,*)'INITIAL VELOCITY DATA HAS BEEN READ SUCCESSFULLY'
+            write(logUnit,*)'INITIAL VELOCITY DATA HAS BEEN READ SUCCESSFULLY'
          endif
-c        CALL READ_64_STDY(STDY_TIME,VX,VY)
-C        VELCNT=1
       ELSE
-         WRITE(*,*)'STEADY-STATE SIMULATION, READING FORT.64 UNTIL ',
+         write(logUnit,*)'STEADY-STATE SIMULATION, READING FORT.64 UNTIL ',
      &              STDY_TIME    
-         !nldCALL READ_VEL(velEnd) -moved above IF
          if (velEnd) then
-            write(*,*) 'ERROR: Could not read velocity data.'
+            write(logUnit,*) 'ERROR: Could not read velocity data.'
             stop
          else
-            WRITE(*,*)'INITIAL VELOCITY DATA HAS BEEN READ SUCCESSFULLY'
+            write(logUnit,*)'INITIAL VELOCITY DATA HAS BEEN READ SUCCESSFULLY'
          endif
-         CLOSE(64)
-         WRITE(*,*)'VELOCITY SOLUTION AT ',STDY_TIME,
+         CLOSE(velUnit)
+         write(logUnit,*)'VELOCITY SOLUTION AT ',STDY_TIME,
      &             ' WILL BE TAKEN AS STEADY-STATE SOLUTION'
       END IF
       
@@ -1087,7 +1203,7 @@ C-------------------INITIAL SEARCH FOR PARTICLES-----------------------
 
 C . . SEARCH ALL ELEMENTS FOR INITIAL PARTICLE LOCATIONS. . . . . . . .
 C . . THIS WILL BE SKIPPED IF LOCAT IS SPECIFIED IN PARTICLE.INP. . . .
-      WRITE(*,*) 'SEARCHING FOR PARTICLES . . .'
+      write(logUnit,*) 'SEARCHING FOR PARTICLES . . .'
       found(:)=.false.
       DO p=1,NP
          if (locat(p).ne.0) then
@@ -1095,38 +1211,40 @@ C . . THIS WILL BE SKIPPED IF LOCAT IS SPECIFIED IN PARTICLE.INP. . . .
             ! location is actually correct
             call locat_chk(p, locat(p))
             if (found(p).eqv..false.) then
-               write(*,*) 'WARNING: Particle ',p,' was not found in the'
+               write(logUnit,*) 'WARNING: Particle ',p,' was not found in the'
      &           //' element specified as its initial location.'
             else
                ! it was found, go to the next one
-               write(6,fmt='(a,i0,a)',advance='no') 'p',p,' '
+               write(logUnit,fmt='(a,i0,a)',advance='no') 'p',p,' '
                cycle
             endif
          else
             ! the particles input file for initial locations will normally
             ! contain zeroes for initial element locations 
-            !WRITE(*,*) 'SEARCHING FOR PARTICLE ',p !jgfdebug
+            !write(logUnit,*) 'SEARCHING FOR PARTICLE ',p !jgfdebug
             do e=1,ne
                call locat_chk(p,e) ! particle, element 
                if (found(p).eqv..true.) then
                   locat(p)=e
-                  !write(*,*) 'particle ',p,' was found in element ',e !jgfdebug
-                  !write(*,*) 'locat(p)=',locat(p),' found(p)=',found(p) !jgfdebug
+                  !write(logUnit,*) 'particle ',p,' was found in element ',e !jgfdebug
+                  !write(logUnit,*) 'locat(p)=',locat(p),' found(p)=',found(p) !jgfdebug
                   exit
                end if
             end do
          endif
-         write(6,fmt='(a,i0,a)',advance='no') 'p',p,' '
+         write(logUnit,fmt='(a,i0,a)',advance='no') 'p',p,' '
       end do
       ! report any particles that were never found
       do p=1,np
          if ((locat(p).eq.0).or.(found(p).eqv..false.)) then
-            !write(*,*) 'locat(p)=',locat(p),' found(p)=',found(p) !jgfdebug
-            write(*,*) 'WARNING: Particle ',p,' cannot be found ',
+            !write(logUnit,*) 'locat(p)=',locat(p),' found(p)=',found(p) !jgfdebug
+            write(logUnit,*) 'WARNING: Particle ',p,' cannot be found ',
      &         'so it will be marked as lost from the beginning.'
             lost(p)=.true.
-            xp(p) = -99999.d0
-            yp(p) = -99999.d0
+            ! @jasonfleming : commented these out so that the last predicted
+            ! particle location can be recorded 
+            ! xp(p) = -99999.d0
+            ! yp(p) = -99999.d0
          end if
       end do
 C----------------------------------------------------------------------      
@@ -1143,12 +1261,12 @@ C . . INITIALIZE SOME TIME KEEPING VARIABLES. . . . . . . . . . . . . .
       ! times
       TIME=STDY_TIME  
 
-      write(*,*) 'INFO: Starting particle tracking.'
+      write(logUnit,*) 'INFO: Starting particle tracking.'
 C . . TRACKING LOOP . . . . . . . . . . . . . . . . . . . . . . . . . .      
       DO s=1,NSTEPS
-c         WRITE(*,*)'TRACKING STEP ',J,' OF ',NSTEPS
+c         write(logUnit,*)'TRACKING STEP ',J,' OF ',NSTEPS
 C . . . .WRITE OUTPUT ? . . . . . . . . . . . . . . . . . . . . . . . .                           
-         !write(*,*) "time=",time,"    outtime=",outtime !jgfdebug
+         !write(logUnit,*) "time=",time,"    outtime=",outtime !jgfdebug
          IF (TIME.EQ.OUTTIME) THEN
            CALL WRITE_DATA()
            OUTTIME=OUTTIME+OUTPER
@@ -1178,8 +1296,10 @@ C . . . . . UPDATE LOCAT IF NECESSARY . . . . . . . . . . . . .
                else
                   ! mark the coordinates as undefined if it is
                   ! permanently lost
-                  XP(p)=-99999
-                  YP(p)=-99999
+                  ! @jasonfleming commented this out to preserve
+                  ! last known predicted particle location
+                  ! XP(p)=-99999
+                  ! YP(p)=-99999
                endif
             endif
          end do 
@@ -1196,7 +1316,7 @@ C . . . .CHECK TO SEE IF WE NEED TO GET NEW VELOCITY DATA
                NOW=TIME   
                CALL READ_VEL(velEnd)
                if (velEnd.eqv..true.) then
-                  WRITE(*,*) 'INFO: Reached end of velocity file.'
+                  write(logUnit,*) 'INFO: Reached end of velocity file.'
                   stop
                else
                   ! these times correspond to fort.64 timing
@@ -1208,12 +1328,16 @@ C . . . .CHECK TO SEE IF WE NEED TO GET NEW VELOCITY DATA
                endif
                ! Since TIME got set to the last fort.64 time
                ! we need to reset it to now, which should be one timestep after VELTIME1 
-               !write(*,*)'TIMENOW: ', TIME, NOW !nlddebug
+               !write(logUnit,*)'TIMENOW: ', TIME, NOW !nlddebug
                TIME=NOW
             END IF
             FRACTIME=(TIME-VELTIME1)/VTIMINC
          END IF        
       END DO
+      write(logUnit,*) "INFO: Wrote ",particleDatasetCount," particle data sets."
+      if ( logUnit.ne.6 ) then
+         close(logUnit)
+      endif
 C------------------------END OF TRACKING LOOP--------------------------         
       STOP
       END PROGRAM MAUREPARTICLE
@@ -1332,9 +1456,10 @@ c INVCP(X(JKI),Y(JKI),SLAM(JKI),SFEA(JKI),SLAM0,SFEA0)
 !----------------------------------------------------------------------
 
       subroutine echoCmdLineOpt(cmdlineopt,cmdlinearg)
+      use maureparams, only : logUnit
       implicit none
       character(*), intent(in) :: cmdlineopt
       character(*), intent(in) :: cmdlinearg
-      write(6,'(a,a,a,a,a)') "INFO: Processing ",
+      write(logUnit,'(a,a,a,a,a)') "INFO: Processing ",
      & trim(cmdlineopt)," ",trim(cmdlinearg),"."
       end subroutine echoCmdLineOpt
