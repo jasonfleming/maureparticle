@@ -17,8 +17,7 @@ C URS Corp. et al., 2007. "Missippi River Reintroduction into Maurepas
 C   Swamp Project PO-29,  Volume VII ov VII Diversion Modeling", Report
 C   prepared for the Louisiana Department of Natural Resources and 
 C   U.S. Environmental Protection Agency. 
-C   http://lacoast.gov/reports/project/
-C   Vol_VII_Diversion%20Modeling%20Report-Dec%208-FINAL.pdf
+C   http://lacoast.gov/reports/project/Vol_VII_Diversion%20Modeling%20Report-Dec%208-FINAL.pdf
 C 
 C and the enhanced Scilab code described in:
 C
@@ -27,6 +26,13 @@ C   Diversion Near Empire, Louisiana",  Thesis submitted in partial
 C   fulfillment of the Master of Science Degree in Civil Engineering,
 C   Louisiana State University.
 C      http://etd.lsu.edu/docs/available/etd-06142007-084318/
+C
+C------------------------------------------------------------------
+C @jasonfleming: updating reference
+C Dill, Nathan Lamont, "Hydrodynamic modeling of a hypothetical river diversion near Empire, Louisiana" (2007). LSU Master's Theses.
+C 660.
+C https://digitalcommons.lsu.edu/gradschool_theses/660
+C------------------------------------------------------------------
 C
 C This Fortran version of Maureparticle differs somewhat from the
 C original SCILAB code. Important differences are: 
