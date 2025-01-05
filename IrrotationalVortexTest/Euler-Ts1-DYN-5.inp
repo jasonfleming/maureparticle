@@ -1,5 +1,5 @@
 DESCRIPTION LINE
-1                 ! NP - NUMBER OF PARTICLES
+0                 ! NP - NUMBER OF PARTICLES
 1                 ! TS - TIMESTEP IN SECONDS
 2010              ! RUNTIM - RUN TIME IN SECONDS
 30                ! OUTPER - PERIOD OF TIME FOR OUTPUT IN SECONDS
@@ -11,9 +11,4 @@ DESCRIPTION LINE
 0.0               ! WFACTOR - applies only of NWS.NE.0
 1                 ! ICS - like ADCIRC, 2 for grid in lon,lat coords, 1 for Cartesian grid in meters
 -71. 40.          ! SLAM0,SFEA0
-141.0   101.  1000  0   ! FOR I=1,NP;  XP(I),YP(I),LOCAT(I) - THESE ARE THE STARTING POSITION AND LOCAT FOR THE PARTICLES,
-136.0   101.  1000  0   ! YOU CAN PUT MORE THAN NP PARTICLES IN THIS FILE BUT ONLY THE FIRST NP WILL BE TRACKED
-146.0   101.  1000  0
-141.0   106.  1000  0
-141.0    96.  1000  0
 
